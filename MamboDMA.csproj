@@ -1,0 +1,41 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net9.0-windows</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>warnings</Nullable>
+		<AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+
+    <!-- Important for native DMA libs -->
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+
+    <!-- Raylib ships natives -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- UI stack: raylib + ImGui bridge (rlImGui_cs brings ImGui.NET) -->
+    <PackageReference Include="Raylib-cs" Version="7.0.1" />
+    <PackageReference Include="rlImgui-cs" Version="3.2.0" />
+    <PackageReference Include="System.IO.Ports" Version="9.0.9" />
+    <PackageReference Include="System.Management" Version="9.0.9" />
+    <PackageReference Include="VmmSharpEx" Version="3.50.9394.154" />
+    <!-- DMA / VMM (your requirement) -->
+  </ItemGroup>
+	<ItemGroup>
+	  <None Include="Assets\Fonts\**\*.ttf" CopyToOutputDirectory="PreserveNewest" />
+	  <None Include="Assets\Icons\**\*.png" CopyToOutputDirectory="PreserveNewest" />
+	  <None Include="Assets\Icons\**\*.svg" CopyToOutputDirectory="PreserveNewest" />
+	</ItemGroup>	
+
+  <!-- Remove Veldrid-related packages from your old file:
+       - ImGui.NET (optional; rlImGui_cs already brings it)
+       - Veldrid
+       - Veldrid.StartupUtilities
+       - Veldrid.SPIRV
+       - SDL2 runtimes section
+  -->
+
+</Project>
