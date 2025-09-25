@@ -118,7 +118,7 @@ public static class OverlayUI
 
         // Process list
         BeginPanel("proc_list", "Processes");
-        open = BeginFold("home_proc_list", "Process List", defaultOpen: true);
+        open = BeginFold("home_proc_list", "Process List", defaultOpen: false);
         if (open)
         {
             if (!snap.VmmReady)
