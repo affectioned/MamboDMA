@@ -10,13 +10,18 @@ namespace MamboDMA;
 public sealed class OverlayWindow : IDisposable
 {
     private bool _running = true;
+    public void Close() => _running = false; 
+    private bool _useVsync = false;      // let user pick
+    private int  _fpsCap   = 144;        // used when vsync is off
 
     public OverlayWindow(string title = "MamboDMA", int width = 1100, int height = 700)
     {
-        Raylib.SetConfigFlags(ConfigFlags.ResizableWindow | ConfigFlags.Msaa4xHint | ConfigFlags.UndecoratedWindow);
+        Raylib.SetConfigFlags(ConfigFlags.ResizableWindow | ConfigFlags.Msaa4xHint | ConfigFlags.UndecoratedWindow | ConfigFlags.AlwaysRunWindow);
         Raylib.InitWindow(width, height, title);
-        Raylib.SetTargetFPS(144);
 
+        Misc.ApplyAll(); 
+        Raylib.ClearWindowState(ConfigFlags.VSyncHint);
+        Raylib.SetTargetFPS(_fpsCap);
         // ImGui context + renderer hookup
         rlImGui.Setup();
 
@@ -36,16 +41,34 @@ public sealed class OverlayWindow : IDisposable
             Raylib.ClearBackground(Color.Black);
 
             rlImGui.Begin();
-
             DockspaceOverMainViewport();
             drawUI();
-
             rlImGui.End();
+
             Raylib.EndDrawing();
         }
     }
-
-    public void Close() => _running = false;
+    
+    public void SetFramePacing(bool useVsync, int fpsCap)
+    {
+        _useVsync = useVsync;
+        _fpsCap = fpsCap;
+        UpdateFramePacing();
+    }    
+    private void UpdateFramePacing()
+    {
+        if (_useVsync)
+        {
+            // vsync on: framerate matches monitor refresh
+            Raylib.SetWindowState(ConfigFlags.VSyncHint);
+            Raylib.SetTargetFPS(0); // let swap interval pace frames
+        }
+        else
+        {
+            Raylib.ClearWindowState(ConfigFlags.VSyncHint);
+            Raylib.SetTargetFPS(Math.Max(0, _fpsCap)); // 0 = uncapped, or any cap you want
+        }
+    }
 
     public void Dispose()
     {
