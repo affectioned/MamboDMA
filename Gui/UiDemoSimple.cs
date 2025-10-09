@@ -1,6 +1,8 @@
 using System.Numerics;
 using ImGuiNET;
+using MamboDMA.Games;
 using MamboDMA.Services;
+using static MamboDMA.Misc;
 using static MamboDMA.OverlayWindow;
 
 namespace MamboDMA;

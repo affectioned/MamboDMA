@@ -6,8 +6,10 @@ using System.Numerics;
 using ImGuiNET;
 using Raylib_cs;
 using static MamboDMA.OverlayWindow;
-using static MamboDMA.StyleEditorUI;
 using MamboDMA.Services;
+using MamboDMA.Games;
+using static MamboDMA.Misc;
+using static MamboDMA.StyleEditorUI;
 
 namespace MamboDMA;
 
@@ -79,7 +81,43 @@ public static class OverlayUI
         if (!open) { ImGui.End(); return; }
 
         var snap = Snapshots.Current;
-
+        BeginPanel("games_panel", "Games");
+        bool openGames = BeginFold("home_games", "Games (Switch between UIs)", defaultOpen: true);
+        if (openGames)
+        {
+            // Build a simple combo of registered games
+            var names = GameRegistry.Names?.ToList() ?? new List<string>();
+            string[] arr = names.ToArray();
+            int cur = Math.Max(0, arr.ToList().IndexOf(GameRegistry.Active?.Name ?? (arr.Length > 0 ? arr[0] : "")));
+            string preview = arr.Length > 0 ? arr[cur] : "(no games registered)";
+        
+            using (UiLayout.PushFieldWidth(240, 380))
+            {
+                if (ImGui.BeginCombo("Active Game", preview))
+                {
+                    for (int i = 0; i < arr.Length; i++)
+                    {
+                        bool sel = (i == cur);
+                        if (ImGui.Selectable(arr[i], sel))
+                            GameRegistry.Select(arr[i]);
+                        if (sel) ImGui.SetItemDefaultFocus();
+                    }
+                    ImGui.EndCombo();
+                }
+            }
+        
+            if (ImGui.Button("Stop Active Game")) GameRegistry.StopActive();
+            ImGui.SameLine();
+            if (ImGui.Button("Start/Restart Active"))
+            {
+                var g = GameRegistry.Active;
+                g?.Stop();
+                g?.Start();
+            }
+        
+            EndFold(openGames);
+        }
+        EndPanel();
         // Process / DMA
         BeginPanel("proc_panel", "Process / DMA");
         open = BeginFold("home_dma_controls", "DMA Controls", defaultOpen: true);
@@ -222,9 +260,18 @@ public static class OverlayUI
             ImGui.Checkbox("Fullscreen", ref _applyFullscreen);
 
             int b = UiLayout.ButtonRowAuto("Apply", "Center Window", "Restore Decorations");
-            if (b == 0) ApplyMonitorSelection();
-            else if (b == 1) CenterOnMonitor(_selectedMonitor);
-            else if (b == 2) RestoreDecorations();
+            if (b == 0)
+            {
+                Misc.ApplyMonitorSelection(_selectedMonitor, _applyBorderless, _applyFullscreen);
+            }
+            else if (b == 1)
+            {
+                Misc.CenterOnMonitor(_selectedMonitor);
+            }
+            else if (b == 2)
+            {
+                Misc.RestoreDecorations();
+            }
 
             ImGui.Separator();
             ImGui.TextDisabled("Tip: Borderless + sizing to monitor gives a clean fullscreen feel without Alt-Tab quirks.");
@@ -563,123 +610,6 @@ public static class OverlayUI
 
         ImGui.End();
         ImGui.PopStyleVar(3);
-    }
-
-    // ---------- Display helpers ----------
-    public static class OverlayWindowApi
-    {
-        private static OverlayWindow? _win;
-        internal static void Bind(OverlayWindow win) => _win = win;
-
-        public static void SetFramePacing(bool useVsync, int fpsCap)
-        {
-            if (_win == null) return;
-            _win.SetFramePacing(useVsync, fpsCap);
-        }
-
-        public static void Quit()
-        {
-            // stop render loop; Program/Main and `using` will dispose/exit
-            _win?.Close();
-        }
-    }    
-    private static void ApplyMonitorSelection()
-    {
-        int monCount = Raylib.GetMonitorCount();
-        if (monCount <= 0) return;
-
-        int mon = Math.Clamp(_selectedMonitor, 0, monCount - 1);
-
-        if (_applyBorderless)
-        {
-            Raylib.SetWindowState(ConfigFlags.UndecoratedWindow);
-            _undecoratedApplied = true;
-            Misc.ApplyAll();
-        }
-        else
-        {
-            Raylib.ClearWindowState(ConfigFlags.UndecoratedWindow);
-            _undecoratedApplied = false;
-            Misc.ApplyAll();
-        }
-
-        var pos = Raylib.GetMonitorPosition(mon);
-        int w = Raylib.GetMonitorWidth(mon);
-        int h = Raylib.GetMonitorHeight(mon);
-
-        if (Raylib.IsWindowFullscreen()) Raylib.ToggleFullscreen();
-        Raylib.SetWindowPosition((int)pos.X, (int)pos.Y);
-        Raylib.SetWindowSize(w, h);
-
-        if (_applyFullscreen && !Raylib.IsWindowFullscreen())
-        {
-            Raylib.ClearWindowState(ConfigFlags.HiddenWindow);      // just in case
-            Raylib.SetWindowState(ConfigFlags.UndecoratedWindow);   // borderless
-            Raylib.SetWindowPosition((int)pos.X, (int)pos.Y);
-            Raylib.SetWindowSize(w, h); 
-            Misc.ApplyAll();          
-        }
-    }
-
-    private static void CenterOnMonitor(int mon)
-    {
-        int monCount = Raylib.GetMonitorCount();
-        if (monCount <= 0) return;
-
-        mon = Math.Clamp(mon, 0, monCount - 1);
-        var pos = Raylib.GetMonitorPosition(mon);
-        int mw = Raylib.GetMonitorWidth(mon);
-        int mh = Raylib.GetMonitorHeight(mon);
-        int ww = Raylib.GetScreenWidth();
-        int wh = Raylib.GetScreenHeight();
-
-        int x = (int)pos.X + (mw - ww) / 2;
-        int y = (int)pos.Y + (mh - wh) / 2;
-        Raylib.SetWindowPosition(x, y);
-    }
-
-    private static void RestoreDecorations()
-    {
-        Raylib.ClearWindowState(ConfigFlags.UndecoratedWindow);
-        _undecoratedApplied = false;
-        if (Raylib.IsWindowFullscreen()) Raylib.ToggleFullscreen();
-    }
-
-    // ---------- Panel helpers ----------
-    private static void BeginPanel(string id, string title)
-    {
-        ImGui.PushFont(Fonts.Bold);
-        // title intentionally not printed (cleaner sections)
-        ImGui.PopFont();
-        ImGui.BeginChild(id, new Vector2(0, 0), ImGuiChildFlags.AutoResizeY | ImGuiChildFlags.None);
-        ImGui.Spacing();
-    }
-    private static void EndPanel()
-    {
-        ImGui.Spacing();
-        ImGui.EndChild();
-        ImGui.Dummy(new Vector2(0, 6));
-    }
-    private static bool BeginFold(string id, string title, bool defaultOpen = false)
-    {
-        var flags = ImGuiTreeNodeFlags.SpanAvailWidth
-                  | (defaultOpen ? ImGuiTreeNodeFlags.DefaultOpen : 0);
-        bool open = ImGui.CollapsingHeader(title, flags);
-        if (open)
-        {
-            ImGui.PushID(id);
-            ImGui.Indent();
-            ImGui.Spacing();
-        }
-        return open;
-    }
-
-    private static void EndFold(bool open)
-    {
-        if (!open) return;
-        ImGui.Spacing();
-        ImGui.Unindent();
-        ImGui.PopID();
     }
 
     // ---------- Memory helpers ----------

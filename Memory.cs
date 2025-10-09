@@ -1,10 +1,12 @@
 using System;
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using MamboDMA.Input;
@@ -19,12 +21,13 @@ public static class DmaMemory
     #region Fields / Properties
 
     private static Vmm? _vmm;
-    public static Vmm Vmm => _vmm ?? throw new InvalidOperationException("VMM not initialized.");
+    // Avoid throwing from properties during probes; use guards instead.
     public static bool IsVmmReady => _vmm is not null;
 
     public static uint Pid { get; private set; }
     public static ulong Base { get; private set; }
     public static bool IsAttached => _vmm is not null && Pid != 0 && Base != 0;
+    public static Vmm? Vmm => _vmm;
 
     #endregion
 
@@ -33,7 +36,9 @@ public static class DmaMemory
     /// <summary>Initialize VMM only (no attach). Applies memory map if requested. Safe to call multiple times.</summary>
     public static void InitOnly(string device = "fpga", bool applyMMap = true)
     {
-        _vmm ??= new Vmm(new[] { "-printf", "-v", "-device", device, "-waitinitialize" });
+        if (_vmm is null)
+            _vmm = new Vmm(new[] { "-printf", "-v", "-device", device, "-waitinitialize" });
+
         if (applyMMap)
         {
             try { _ = _vmm.GetMemoryMap(applyMap: true, outputFile: "mmap.txt"); } catch { /* best-effort */ }
@@ -50,11 +55,8 @@ public static class DmaMemory
     /// <summary>Initializes VMM (if needed) and blocks until the PID/module base are found.</summary>
     public static void Attach(string exeName, string? moduleName = null, string device = "fpga", bool applyMMap = true)
     {
-        _vmm ??= new Vmm(new[] { "-printf", "-v", "-device", device, "-waitinitialize" });
-        if (applyMMap)
-        {
-            try { _ = _vmm.GetMemoryMap(applyMap: true, outputFile: "mmap.txt"); } catch { /* best-effort */ }
-        }
+        InitOnly(device, applyMMap);
+        if (_vmm is null) throw new InvalidOperationException("VMM failed to initialize.");
 
         Pid = WaitForPidByName(exeName);
         Base = WaitForModuleBase(Pid, moduleName ?? exeName);
@@ -66,8 +68,8 @@ public static class DmaMemory
         error = "";
         try
         {
-            _vmm ??= new Vmm(new[] { "-printf", "-v", "-device", device, "-waitinitialize" });
-            if (applyMMap) { try { _ = _vmm.GetMemoryMap(applyMap: true, outputFile: "mmap.txt"); } catch { } }
+            InitOnly(device, applyMMap);
+            if (_vmm is null) { error = "VMM not initialized."; return false; }
 
             if (!_vmm.PidGetFromName(exeName, out var pid) || pid == 0) { error = "PID not found."; return false; }
 
@@ -86,6 +88,41 @@ public static class DmaMemory
         _vmm = null; Pid = 0; Base = 0;
     }
 
+    // External-attach plumbing (optional shim API)
+    private static Func<(bool attached, uint pid, ulong @base)> _probe = () => (false, 0, 0);
+    private static Func<ulong, (bool ok, ulong val)> _readU64 = _ => (false, 0);
+    private static Func<ulong, int, byte[]?> _readBytes = (_, __) => null;
+
+    public static bool Attached => _probe().attached;
+
+    public static void AttachExternal(
+        Func<(bool attached, uint pid, ulong @base)> probe,
+        Func<ulong, (bool ok, ulong val)> readU64, // wrapper pattern from DmaMemory.Read
+        Func<ulong, int, byte[]?> readBytes)
+    {
+        _probe = probe;
+        _readU64 = readU64;
+        _readBytes = readBytes;
+    }
+    #endregion
+
+    #region Guards
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void EnsureInitialized()
+    {
+        if (_vmm is null)
+            throw new InvalidOperationException("VMM not initialized. Call DmaMemory.InitOnly() or Attach() first.");
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void EnsureAttached()
+    {
+        EnsureInitialized();
+        if (Pid == 0 || Base == 0)
+            throw new InvalidOperationException("Not attached to a process. Call DmaMemory.Attach() first.");
+    }
+
     #endregion
 
     #region Process Enumeration
@@ -95,11 +132,11 @@ public static class DmaMemory
     /// <summary>Returns (Pid, Name, IsWow64) for all running processes.</summary>
     public static List<ProcEntry> GetProcessList()
     {
-        if (_vmm is null) throw new InvalidOperationException("VMM not initialized.");
+        EnsureInitialized();
 
         try
         {
-            var infos = _vmm.ProcessGetInformationAll(); // ProcessInfo[]
+            var infos = _vmm!.ProcessGetInformationAll(); // ProcessInfo[]
             if (infos is null || infos.Length == 0) return new();
 
             return infos
@@ -112,7 +149,7 @@ public static class DmaMemory
         {
             // Fallback: enumerate PIDs and try to pull main module name.
             var list = new List<ProcEntry>();
-            var pids = _vmm.PidGetList() ?? Array.Empty<uint>();
+            var pids = _vmm!.PidGetList() ?? Array.Empty<uint>();
             foreach (var pid in pids)
             {
                 try
@@ -148,11 +185,11 @@ public static class DmaMemory
     /// <summary>List loaded modules for a PID (default = currently attached).</summary>
     public static List<ModuleInfo> GetModules(uint? pid = null, bool includeWow64Flag = false)
     {
-        if (_vmm == null) throw new InvalidOperationException("VMM not initialized.");
+        EnsureInitialized();
         uint p = pid ?? Pid;
         if (p == 0) return new();
 
-        var arr = _vmm.Map_GetModule(p, fExtendedInfo: false);
+        var arr = _vmm!.Map_GetModule(p, fExtendedInfo: false);
         if (arr == null || arr.Length == 0) return new();
 
         var list = new List<ModuleInfo>(arr.Length);
@@ -183,25 +220,35 @@ public static class DmaMemory
     #region Read / Write Helpers
 
     public static bool Read<T>(ulong address, out T value) where T : unmanaged
-        => Vmm.MemReadValue(Pid, address, out value);
+    {
+        EnsureAttached();
+        return _vmm!.MemReadValue(Pid, address, out value);
+    }
 
     public static T Read<T>(ulong address) where T : unmanaged
     {
-        Vmm.MemReadValue(Pid, address, out T v);
+        EnsureAttached();
+        _vmm!.MemReadValue(Pid, address, out T v);
         return v;
     }
+
     public static T[]? ReadArray<T>(ulong address, int count) where T : unmanaged
-        => Vmm.MemReadArray<T>(Pid, address, count);
+    {
+        EnsureAttached();
+        return _vmm!.MemReadArray<T>(Pid, address, count);
+    }
+
     /// <summary>Read raw bytes. Returns null on failure. If fewer bytes were read than requested, the array is resized.</summary>
     public static byte[]? ReadBytes(ulong address, uint size, VmmFlags flags = VmmFlags.NONE)
     {
+        EnsureAttached();
         if (size == 0) return Array.Empty<byte>();
         var buf = new byte[size];
         unsafe
         {
             fixed (byte* p = buf)
             {
-                if (!Vmm.MemRead(Pid, address, (nint)p, size, out var read, (VFlags)flags) || read == 0)
+                if (!_vmm!.MemRead(Pid, address, (nint)p, size, out var read, (VFlags)flags) || read == 0)
                     return null;
                 if (read < size) Array.Resize(ref buf, (int)read);
             }
@@ -209,7 +256,12 @@ public static class DmaMemory
         return buf;
     }
 
-    /// <summary>Read a zero-terminated ASCII string (best-effort). Returns empty string on failure.</summary>
+    public static string? ReadString(ulong address, int bytes, Encoding enc)
+    {
+        EnsureAttached();
+        return _vmm!.MemReadString(Pid, address, bytes, enc);
+    }
+
     public static string ReadAsciiZ(ulong address, int max = 256, VmmFlags flags = VmmFlags.NONE)
     {
         if (max <= 0) max = 1;
@@ -220,7 +272,6 @@ public static class DmaMemory
         return Encoding.ASCII.GetString(bytes);
     }
 
-    /// <summary>Read a zero-terminated UTF-16 (Unicode) string (useful if names show as "?????").</summary>
     public static string ReadUtf16Z(ulong address, int maxChars = 256, VmmFlags flags = VmmFlags.NONE)
     {
         if (maxChars <= 0) maxChars = 1;
@@ -236,47 +287,53 @@ public static class DmaMemory
     }
 
     public static string? ReadUnicodeZ(ulong address, int max = 256)
-        => Vmm.MemReadString(Pid, address, max * 2, Encoding.Unicode);
+    {
+        EnsureAttached();
+        return _vmm!.MemReadString(Pid, address, max * 2, Encoding.Unicode);
+    }
+
     public static string? ReadUtf32Z(ulong address, int max = 256)
-        => Vmm.MemReadString(Pid, address, max * 2, Encoding.UTF32);
+    {
+        EnsureAttached();
+        return _vmm!.MemReadString(Pid, address, max * 2, Encoding.UTF32);
+    }
+
     public static string? ReadBigUnicodeZ(ulong address, int max = 256)
-        => Vmm.MemReadString(Pid, address, max * 2, Encoding.BigEndianUnicode);
+    {
+        EnsureAttached();
+        return _vmm!.MemReadString(Pid, address, max * 2, Encoding.BigEndianUnicode);
+    }
 
     public static bool Write<T>(ulong address, in T value) where T : unmanaged
-        => Vmm.MemWriteValue(Pid, address, value);
+    {
+        EnsureAttached();
+        return _vmm!.MemWriteValue(Pid, address, value);
+    }
 
     #endregion
+
     #region Scatter Helpers
-    
+
     /// <summary>Create a new scatter map bound to the current game PID.</summary>
     public static ScatterReadMap Scatter()
     {
-        if (_vmm is null) throw new InvalidOperationException("VMM not initialized.");
-        if (Pid == 0) throw new InvalidOperationException("Not attached to a process.");
-        return new ScatterReadMap(_vmm, Pid);
+        EnsureAttached();
+        return new ScatterReadMap(_vmm!, Pid);
     }
-    
+
     /// <summary>
     /// Execute a single scatter round defined by <paramref name="define"/>.
-    /// Example:
-    /// <code>
-    /// DmaMemory.ScatterRound(rd => {
-    ///     rd.Add(out ulong localPawn, baseAddr + offs.LocalPawn);
-    ///     rd.AddBuffer(nameBuf, namePtr, 64);
-    /// });
-    /// </code>
     /// </summary>
     public static void ScatterRound(Action<ScatterReadRound> define, bool useCache = false)
     {
-        if (_vmm is null) throw new InvalidOperationException("VMM not initialized.");
-        if (Pid == 0) throw new InvalidOperationException("Not attached to a process.");
-    
-        using var map = new ScatterReadMap(_vmm, Pid);
+        EnsureAttached();
+
+        using var map = new ScatterReadMap(_vmm!, Pid);
         var rd = map.AddRound(useCache);
         define(rd);
         map.Execute();
     }
-    
+
     /// <summary>
     /// Follow a pointer chain with direct reads: result = (((base + o0)-> + o1)-> + ...).
     /// Returns false if any hop fails or resolves to 0.
@@ -286,31 +343,33 @@ public static class DmaMemory
         result = baseAddr;
         foreach (var off in offsets)
         {
-            // add offset then deref
-            ulong nextAddr = result + off;
-            if (!Read(nextAddr, out result) || result == 0)
+            ulong nextAddr = result + off;        // add offset
+            if (!Read(nextAddr, out result) || result == 0) // deref
                 return false;
         }
         return true;
     }
-    
+
     #endregion
+
     #region Private Wait Helpers
 
     private static uint WaitForPidByName(string exe)
     {
+        EnsureInitialized();
         while (true)
         {
-            if (Vmm.PidGetFromName(exe, out var pid) && pid != 0) return pid;
+            if (_vmm!.PidGetFromName(exe, out var pid) && pid != 0) return pid;
             Thread.Sleep(300);
         }
     }
 
     private static ulong WaitForModuleBase(uint pid, string module)
     {
+        EnsureInitialized();
         while (true)
         {
-            var b = Vmm.ProcessGetModuleBase(pid, module);
+            var b = _vmm!.ProcessGetModuleBase(pid, module);
             if (b != 0) return b;
             Thread.Sleep(300);
         }
@@ -318,7 +377,7 @@ public static class DmaMemory
 
     #endregion
 
-    #region IVmmEx Adapter
+    #region IVmmEx Adapter + RTTI helpers
 
     public sealed class VmmSharpExAdapter : IVmmEx
     {
@@ -520,6 +579,153 @@ public static class DmaMemory
         }
 
         #endregion
+    }
+
+    public static class Rtti
+    {
+        [StructLayout(LayoutKind.Sequential, Pack = 1)]
+        private struct CompleteObjectLocator
+        {
+            public uint signature, offset, cdOffset, typeDescriptorRva, classDescriptorRva, objectBase;
+        }
+
+        // Cache module ranges once
+        private static (ulong Base, ulong End)[] _mods = Array.Empty<(ulong, ulong)>();
+        private static IVmmEx? _vmm;
+
+        public static void BuildModuleRanges(params string[] modules)
+        {
+            // Lazy bind the adapter to current VMM on first use
+            if (_vmm is null)
+            {
+                if (!IsVmmReady) throw new InvalidOperationException("VMM not initialized.");
+                _vmm = new VmmSharpExAdapter(DmaMemory._vmm!);
+            }
+
+            var list = new List<(ulong, ulong)>();
+            foreach (var m in modules)
+                if (_vmm.GetModuleInfo(DmaMemory.Pid, m, out var b, out var sz) && b != 0 && sz != 0)
+                    list.Add((b, b + sz));
+            _mods = list.ToArray();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool InAnyModule(ulong va)
+        {
+            foreach (var (b, e) in _mods)
+                if (va >= b && va < e) return true;
+            return false;
+        }
+
+        public static bool TryRead(ulong obj, out string name)
+        {
+            name = "";
+            if (!DmaMemory.Read(obj, out ulong vtable) || (vtable & 0x7) != 0 || !InAnyModule(vtable)) return false;
+            if (!DmaMemory.Read(vtable - 8, out ulong colPtr) || colPtr == 0 || !InAnyModule(colPtr)) return false;
+
+            if (!DmaMemory.Read(colPtr, out CompleteObjectLocator col) || col.signature != 1) return false;
+
+            ulong imageBase = colPtr - col.objectBase;
+            ulong typeDescPtr = imageBase + col.typeDescriptorRva;
+            if (!InAnyModule(typeDescPtr)) return false;
+
+            var s = DmaMemory.ReadString(typeDescPtr + 0x14, 128, Encoding.ASCII);
+            if (string.IsNullOrEmpty(s)) return false;
+
+            if (s.StartsWith(".?AV")) s = s[4..];
+            int cut;
+            if ((cut = s.IndexOf("@@", StringComparison.Ordinal)) >= 0) s = s[..cut];
+            foreach (var suf in new[] { "@gamecode", "@enf", "@gamelib" })
+                if ((cut = s.IndexOf(suf, StringComparison.Ordinal)) >= 0) s = s[..cut];
+
+            name = s;
+            return !string.IsNullOrWhiteSpace(name);
+        }
+
+        public static string ReadRtti(ulong addr)
+        {
+            if (!DmaMemory.Read(addr, out ulong vtable) || vtable == 0) return "Invalid vtable";
+            if (!DmaMemory.Read(vtable - 8, out ulong rttiPtr) || rttiPtr == 0) return "Invalid RTTI pointer";
+
+            CompleteObjectLocator col;
+            if (!DmaMemory.Read(rttiPtr, out col)) return "Bad COL read";
+            if (col.signature != 1) return $"Bad signature: {col.signature}";
+
+            ulong imageBase = rttiPtr - col.objectBase;
+            ulong typeDescPtr = imageBase + col.typeDescriptorRva;
+
+            string? name = DmaMemory.ReadString(typeDescPtr + 0x14, 128, Encoding.ASCII);
+            if (string.IsNullOrEmpty(name)) return "<?>";
+            if (name.StartsWith(".?AV")) name = name.Substring(4);
+            if (name.EndsWith("@@")) name = name.Substring(0, name.IndexOf("@@", StringComparison.Ordinal));
+            foreach (var suf in new[] { "@gamecode", "@enf", "@gamelib" })
+                if (name.EndsWith(suf, StringComparison.Ordinal))
+                    name = name.Substring(0, name.IndexOf(suf, StringComparison.Ordinal));
+
+            return name;
+        }
+    }
+
+    #endregion
+
+    #region Prefab path helpers
+
+    private static readonly ConcurrentDictionary<ulong, ulong> _ptrCache = new();
+
+    public static bool TryGetPath(ulong prefabDataClass, out string path)
+    {
+        path = null!;
+        if (prefabDataClass == 0) return false;
+
+        if (_ptrCache.TryGetValue(prefabDataClass, out var cached) && cached != 0)
+            return TryReadAsciiZ(cached, out path);
+
+        // Probe first ~0x180 bytes of the class for plausible char* fields
+        const int scanBytes = 0x180;
+        if (!ReadBytesSlow(prefabDataClass, scanBytes, out var buf)) return false;
+
+        for (int off = 0; off + 8 <= buf.Length; off += 8)
+        {
+            ulong p = BitConverter.ToUInt64(buf, off);
+            if (p < 0x10000UL) continue;               // junk
+            if (!TryReadAsciiZ(p, out var s)) continue;
+            if (s.IndexOf(".ent", StringComparison.OrdinalIgnoreCase) >= 0
+                || s.IndexOf('/', StringComparison.Ordinal) >= 0)
+            {
+                _ptrCache[prefabDataClass] = p;
+                path = s;
+                return true;
+            }
+        }
+
+        _ptrCache[prefabDataClass] = 0;
+        return false;
+    }
+
+    // renamed to avoid colliding with public ReadBytes()
+    private static bool ReadBytesSlow(ulong addr, int len, out byte[] buf)
+    {
+        buf = new byte[len];
+        for (int i = 0; i < len; i++)
+        {
+            if (!Read(addr + (ulong)i, out buf[i])) { buf = null!; return false; }
+        }
+        return true;
+    }
+
+    private static bool TryReadAsciiZ(ulong addr, out string s)
+    {
+        Span<byte> tmp = stackalloc byte[160];
+        int n = 0;
+        for (; n < tmp.Length; n++)
+        {
+            if (!Read(addr + (ulong)n, out byte b)) { s = null!; return false; }
+            if (b == 0) break;
+            if (b < 32 || b >= 127) { s = null!; return false; }
+            tmp[n] = b;
+        }
+        s = (n > 0) ? Encoding.ASCII.GetString(tmp[..n].ToArray()) : null!;
+        return !string.IsNullOrEmpty(s);
     }
 
     #endregion

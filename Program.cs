@@ -1,72 +1,86 @@
 ﻿using System;
+using MamboDMA.Games;
+using MamboDMA.Games.ABI;
+using MamboDMA.Games.DayZ;
+using MamboDMA.Games.Example;
+using MamboDMA.Games.Reforger;
 using MamboDMA.Services;
+using Raylib_cs;
+using static MamboDMA.Misc;
 using static MamboDMA.OverlayUI;
+// using static MamboDMA.OverlayUI; // ← remove this
 
-namespace MamboDMA;
-
-internal static class Program
+namespace MamboDMA
 {
-    private enum UiChoice { Advanced, Simple }
-
-    private static UiChoice AskUiChoice(string[] args)
+    internal static class Program
     {
-        // 1) command-line override
-        for (int i = 0; i < args.Length; i++)
+        private enum UiChoice { Advanced, Simple, Game }
+
+        private static UiChoice AskUiChoice(string[] args)
         {
-            var a = args[i].Trim().ToLowerInvariant();
-            if (a is "--ui" or "-u")
+            for (int i = 0; i < args.Length; i++)
             {
-                if (i + 1 < args.Length)
+                var a = args[i].Trim().ToLowerInvariant();
+                if (a is "--ui" or "-u")
                 {
-                    var val = args[i + 1].Trim().ToLowerInvariant();
-                    if (val.StartsWith("adv")) return UiChoice.Advanced;
-                    if (val.StartsWith("simp")) return UiChoice.Simple;
+                    if (i + 1 < args.Length)
+                    {
+                        var val = args[i + 1].Trim().ToLowerInvariant();
+                        if (val.StartsWith("adv")) return UiChoice.Advanced;
+                        if (val.StartsWith("simp")) return UiChoice.Simple;
+                        if (val.StartsWith("game")) return UiChoice.Game;
+                    }
                 }
+                else if (a is "advanced" or "adv") return UiChoice.Advanced;
+                else if (a is "simple" or "simp") return UiChoice.Simple;
+                else if (a is "game") return UiChoice.Game;
             }
-            else if (a is "advanced" or "adv") return UiChoice.Advanced;
-            else if (a is "simple" or "simp") return UiChoice.Simple;
+
+            // Optional: skip prompt if no console (keeps Advanced as default)
+            return UiChoice.Game;
         }
 
-        // 2) interactive prompt
-        Console.WriteLine("Choose UI:");
-        Console.WriteLine("  [1] OverlayUI (Advanced Example)");
-        Console.WriteLine("  [2] ServiceDemoUI (Simple Example)");
-        Console.Write("Enter 1 or 2 (default = 1): ");
-        var input = Console.ReadLine()?.Trim();
+        private static (string title, Action draw) ResolveUi(UiChoice choice)
+            => choice switch
+            {
+                UiChoice.Simple   => ("MamboDMA · Simple",   ServiceDemoUI.Draw),
+                UiChoice.Advanced => ("MamboDMA · Advanced", OverlayUI.Draw),
+                UiChoice.Game     => ("MamboDMA · Game", () => GameSelector.Draw()),
+            };
 
-        return input == "2" ? UiChoice.Simple : UiChoice.Advanced;
-    }
-
-    private static (string title, Action draw) ResolveUi(UiChoice choice)
-    {
-        switch (choice)
+        private static void Main(string[] args)
         {
-            case UiChoice.Simple:
-                return ("MamboDMA · Simple", ServiceDemoUI.Draw);
-            case UiChoice.Advanced:
-            default:
-                return ("MamboDMA · Advanced", OverlayUI.Draw);
-        }
-    }
+            JobSystem.Start(workers: 3);
+            var choice = AskUiChoice(args);
+            var (title, drawLoop) = ResolveUi(UiChoice.Game);
 
-    private static void Main(string[] args)
-    {
-        JobSystem.Start(workers: 3);
+            using var win = new OverlayWindow(title, 1100, 700);
+            OverlayWindowApi.Bind(win);
 
-        var choice = AskUiChoice(args);
-        var (title, drawLoop) = ResolveUi(choice);
+            // Register all game plugins here:
+            GameRegistry.Register(new ReforgerGame());
+            GameRegistry.Register(new DayZGame()); 
+            GameRegistry.Register(new ExampleGame());
+            GameRegistry.Register(new ABIGame());
+            // GameRegistry.Register(new SomeOtherGame());
+            // GameRegistry.Register(new YetAnotherGame());
 
-        using var win = new OverlayWindow(title, 1100, 700);
-        OverlayWindowApi.Bind(win);
+            // Optional default selection (no Start() happens here):
+            // If you want no default, just skip this and the combo shows the first name.
+            GameRegistry.Select("ExampleGame");
+            
+            Image icon = Raylib.LoadImage("Assets/Img/Logo.png");
+            Raylib.SetWindowIcon(icon);
+            Raylib.UnloadImage(icon);
+            Win32IconHelper.SetWindowIcons("Assets/Img/Logo.ico");
 
-        try
-        {
-            win.Run(drawLoop);   // returns when you click the in-UI “X” (OverlayWindowApi.Quit)
-        }
-        finally
-        {
-            try { VmmService.DisposeVmm(); } catch { }
-            try { JobSystem.Stop(); } catch { }
+            try { win.Run(drawLoop); }
+            finally
+            {
+                try { VmmService.DisposeVmm(); } catch { }
+                try { JobSystem.Stop(); } catch { }
+                try { DayZUpdater.Stop(); } catch { }
+            }
         }
     }
 }

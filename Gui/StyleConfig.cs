@@ -5,6 +5,7 @@ using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ImGuiNET;
+using static MamboDMA.Misc;
 using static MamboDMA.OverlayWindow;
 
 namespace MamboDMA;
@@ -36,7 +37,7 @@ public static class StyleConfig
     public static UiSettings Settings { get; private set; } = new UiSettings();
     public static string ConfigDir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "MamboDMA", "Examples");
+        "MamboDMA", "DMAExample", "Themes");
     public static string DefaultConfigPath => Path.Combine(ConfigDir, "config.json");
 
     // ---------- apply / capture ----------

@@ -3,7 +3,7 @@ using System.Numerics;
 using ImGuiNET;
 using Raylib_cs;
 using rlImGui_cs;
-using static MamboDMA.StyleEditorUI;
+using static MamboDMA.Misc;
 
 namespace MamboDMA;
 
@@ -14,11 +14,14 @@ public sealed class OverlayWindow : IDisposable
     private bool _useVsync = false;      // let user pick
     private int  _fpsCap   = 144;        // used when vsync is off
 
-    public OverlayWindow(string title = "MamboDMA", int width = 1100, int height = 700)
+    public OverlayWindow(string title = "MamboDMA", int width = 1200, int height = 800)
     {
         Raylib.SetConfigFlags(ConfigFlags.ResizableWindow | ConfigFlags.Msaa4xHint | ConfigFlags.UndecoratedWindow | ConfigFlags.AlwaysRunWindow);
         Raylib.InitWindow(width, height, title);
-
+        Image icon = Raylib.LoadImage("Assets/Img/Logo.png"); // must be square, e.g. 256x256
+        Raylib.SetWindowIcon(icon);
+        Raylib.UnloadImage(icon);
+        Win32IconHelper.SetWindowIcons("Assets/Img/Logo.ico");
         Misc.ApplyAll(); 
         Raylib.ClearWindowState(ConfigFlags.VSyncHint);
         Raylib.SetTargetFPS(_fpsCap);
@@ -98,8 +101,8 @@ public sealed class OverlayWindow : IDisposable
         cfg.GlyphOffset = Vector2.Zero;
 
         // Load weights from your Assets/Fonts/static/
-        Fonts.Regular = io.Fonts.AddFontFromFileTTF("Assets/Fonts/AlanSans-Regular.ttf", baseSize, cfg);
-        Fonts.Medium = io.Fonts.AddFontFromFileTTF("Assets/Fonts/AlanSans-Medium.ttf", baseSize, cfg);
+        Fonts.Regular = io.Fonts.AddFontFromFileTTF("Assets/Fonts/AlanSans-Medium.ttf", baseSize, cfg);
+        Fonts.Medium = io.Fonts.AddFontFromFileTTF("Assets/Fonts/AlanSans-SemiBold.ttf", baseSize, cfg);
         Fonts.Bold = io.Fonts.AddFontFromFileTTF("Assets/Fonts/AlanSans-Bold.ttf", baseSize, cfg);
 
         cfg.Destroy();
@@ -127,20 +130,19 @@ public sealed class OverlayWindow : IDisposable
             ImGuiWindowFlags.NoResize |
             ImGuiWindowFlags.NoMove |
             ImGuiWindowFlags.NoBringToFrontOnFocus |
-            ImGuiWindowFlags.NoNavFocus;
+            ImGuiWindowFlags.NoNavFocus |
+            ImGuiWindowFlags.NoBackground;               // ← IMPORTANT
+
+        // Optional: ensure WindowBg is fully transparent for this host
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0, 0, 0, 0));
 
         ImGui.Begin("##DockRoot", flags);
         ImGui.PopStyleVar(3);
 
         var dockspaceId = ImGui.GetID("MamboDockspace");
-        ImGui.DockSpace(dockspaceId, Vector2.Zero, ImGuiDockNodeFlags.PassthruCentralNode);
+        ImGui.DockSpace(dockspaceId, Vector2.Zero, ImGuiDockNodeFlags.PassthruCentralNode); // ← already set
 
         ImGui.End();
-    }
-    internal static class Fonts
-    {
-        public static ImFontPtr Regular;
-        public static ImFontPtr Medium;
-        public static ImFontPtr Bold;
-    }     
+        ImGui.PopStyleColor(); // pop WindowBg
+    }    
 }
