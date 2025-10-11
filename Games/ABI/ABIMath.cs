@@ -3,7 +3,6 @@ using System.Numerics;
 
 namespace MamboDMA.Games.ABI
 {
-    /// <summary>Math helpers ported from ABI C++.</summary>
     public static class ABIMath
     {
         public static Vector3 Sub(Vector3 a, Vector3 b) =>
@@ -12,42 +11,55 @@ namespace MamboDMA.Games.ABI
         public static float Dot(Vector3 a, Vector3 b) =>
             a.X * b.X + a.Y * b.Y + a.Z * b.Z;
 
-        public static void GetAxes(Vector3 angles, out Vector3 x, out Vector3 y, out Vector3 z)
+        /// <summary>
+        /// Builds Unreal-style orientation axes from pitch/yaw/roll.
+        /// </summary>
+        public static void GetAxes(Vector3 rot, out Vector3 x, out Vector3 y, out Vector3 z)
         {
-            double pitch = angles.X * Math.PI / 180.0;
-            double yaw   = angles.Y * Math.PI / 180.0;
-            double roll  = angles.Z * Math.PI / 180.0;
+            float pitch = rot.X * (float)Math.PI / 180f;
+            float yaw   = rot.Y * (float)Math.PI / 180f;
+            float roll  = rot.Z * (float)Math.PI / 180f;
 
-            float sp = (float)Math.Sin(pitch);
-            float cp = (float)Math.Cos(pitch);
-            float sy = (float)Math.Sin(yaw);
-            float cy = (float)Math.Cos(yaw);
-            float sr = (float)Math.Sin(roll);
-            float cr = (float)Math.Cos(roll);
+            float sp = MathF.Sin(pitch);
+            float cp = MathF.Cos(pitch);
+            float sy = MathF.Sin(yaw);
+            float cy = MathF.Cos(yaw);
+            float sr = MathF.Sin(roll);
+            float cr = MathF.Cos(roll);
 
+            // Unreal forward (X), right (Y), up (Z)
             x = new Vector3(cp * cy, cp * sy, sp);
-            y = new Vector3(sr * sp * cy - cr * sy, sr * sp * sy + cr * cy, -sr * cp);
+            y = new Vector3(cy * sp * sr - cr * sy, sy * sp * sr + cr * cy, -sr * cp);
             z = new Vector3(-(cr * sp * cy + sr * sy), cy * sr - cr * sp * sy, cr * cp);
         }
 
-        public static bool WorldToScreen(Vector3 pos, out Vector2 screen, CameraInfo cam, float width, float height)
+        /// <summary>
+        /// Projects a 3D world position to 2D screen coordinates (Unreal left-handed).
+        /// </summary>
+        public static bool WorldToScreen(Vector3 world, out Vector2 screen, CameraInfo cam, float width, float height)
         {
             screen = Vector2.Zero;
-            Vector3 delta = Sub(pos, cam.Position);
+
+            // World to camera space
+            Vector3 delta = Sub(world, cam.Position);
             Vector3 transformed = new(
+                Dot(delta, cam.AxisX),
                 Dot(delta, cam.AxisY),
-                Dot(delta, cam.AxisZ),
-                Dot(delta, cam.AxisX)
+                Dot(delta, cam.AxisZ)
             );
 
-            if (transformed.Z < 1f) return false;
+            // Unreal's camera looks along +X (forward)
+            if (transformed.X <= 1f) return false;
 
-            float cx = width / 2f, cy = height / 2f;
-            float fov = cam.Fov;
-            screen.X = cx + transformed.X * cx / (float)Math.Tan(fov * Math.PI / 360f) / transformed.Z;
-            screen.Y = cy - transformed.Y * cx / (float)Math.Tan(fov * Math.PI / 360f) / transformed.Z;
+            float fovRad = cam.Fov * (float)Math.PI / 180f;
+            float tanHalfFov = MathF.Tan(fovRad / 2f);
+            float cx = width * 0.5f;
+            float cy = height * 0.5f;
 
-            return screen.X > 0 && screen.Y > 0 && screen.X <= width && screen.Y <= height;
+            screen.X = cx - (transformed.Y * cx) / (tanHalfFov * transformed.X);
+            screen.Y = cy - (transformed.Z * cx) / (tanHalfFov * transformed.X);
+
+            return screen.X >= 0 && screen.X <= width && screen.Y >= 0 && screen.Y <= height;
         }
 
         public static float Distance(Vector3 a, Vector3 b) =>

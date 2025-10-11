@@ -19,23 +19,25 @@ namespace MamboDMA.Games.ABI
         public const ulong ActorsOffset       = 0x98;
         public const ulong ActorSize          = 0xA0;
         public const ulong BoneArrayOne = 0x658;
-
+        public const ulong ComponentToWorld = 0x210;
+        public const ulong ComponentToWorld_Translation = ComponentToWorld + 0x10;
         // Player hierarchy
         public const ulong LocalPlayers = 0x38;
         public const ulong PlayerController   = 0x30;
         public const ulong AcknowledgedPawn   = 0x390;
-        public const ulong CameraManager      = 0x3A8;
+        public const ulong CameraManager        = 0x3A8;
+        public const ulong CameraCachePrivate   = 0x2090;
+        public const ulong CameraPOVLocation    = 0x10;
+        public const ulong CameraPOVRotation    = 0x1C;
         public const ulong CameraCacheOffset  = 0x1E90 + 0x10;
         public const ulong PlayerState        = 0x340;
         public const ulong Controller         = 0x358;
         public const ulong CachedCharacterType = 0x152D;
-
         // Components
         public const ulong RootComponent = 0x168;
         public const ulong RelativeLocation   = 0x16C;
         public const ulong Mesh               = 0x380;
         public const ulong BoneArray          = 0x658;
-        public const ulong ComponentToWorld   = 0x210;
         public const ulong PlayerNamePrivate  = 0x3F0;
 
         // Combat
