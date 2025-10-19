@@ -1,4 +1,6 @@
 // MamboDMA/Games/GameSelector.cs
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using ImGuiNET;
@@ -8,12 +10,22 @@ using Raylib_cs;
 using static MamboDMA.Misc;
 using static MamboDMA.OverlayWindow;
 using static MamboDMA.StyleEditorUI;
+using System.IO;
 
 namespace MamboDMA.Games
 {
     /// <summary>ImGui dropdown to switch among all GameRegistry-registered games.</summary>
     public static class GameSelector
     {
+        // ─────────────────────────────────────────────────────────────────
+        // Global flags (spelled exactly as requested)
+        // These are kept in sync each frame from Snapshots.Current.
+        // ─────────────────────────────────────────────────────────────────
+        public static bool VmmInnit { get; private set; }
+        public static bool AttachedToProccess { get; private set; }
+        private static bool _loadedLastGame = false;
+        private static readonly string _lastGamePath =
+            Path.Combine(AppContext.BaseDirectory, "last_game.txt");
         private static string _exe = "example.exe";
         private static int _selectedMonitor = 0;
         private static bool _applyBorderless = false;
@@ -22,17 +34,52 @@ namespace MamboDMA.Games
         private static string _appName = "MamboDMA";
         static bool _uiUseVsync = false;
         static int _uiFpsCap = 144;
+
+        // Process/Module UI state
         private static int _procSelectedIndex = -1;
+        private static string _procFilter = string.Empty;
+        private static string _modFilter = string.Empty;
+
+        // Transition trackers (for auto-refresh)
+        private static bool _prevVmmInnit = false;
+        private static bool _prevAttached = false;
+
+        // Input
         private static int _selectedInputIndex = -1;
         private static List<MamboDMA.Input.Device.SerialDeviceInfo> _inputDevices = new();
         private static bool _inputInitialized = false;
+
         public static int SelectedMonitor => _selectedMonitor;
+
         public static void Draw()
         {
             // Let the active game do light per-frame pumping
             GameHost.Tick();
             Assets.Load(); // ensure logo loaded
-            Theme.DrawThemePanel();        
+            Theme.DrawThemePanel();
+
+            // Sync flags from snapshot
+            var s = Snapshots.Current;
+            VmmInnit = s.VmmReady;
+            AttachedToProccess = s.VmmReady && s.Pid > 0 && s.MainBase != 0;
+
+            // Auto-actions on transitions
+            if (!_prevVmmInnit && VmmInnit)
+            {
+                // VMM just initialized → refresh process list
+                VmmService.RefreshProcesses();
+                _procSelectedIndex = -1;
+                _procFilter = string.Empty;
+            }
+            if (!_prevAttached && AttachedToProccess)
+            {
+                // Just attached → refresh modules
+                VmmService.RefreshModules();
+                _modFilter = string.Empty;
+            }
+            _prevVmmInnit = VmmInnit;
+            _prevAttached = AttachedToProccess;
+
             // Home window: game selector + active game panel
             ImGui.Begin("Home");
             DrawCombo("Game");
@@ -41,22 +88,21 @@ namespace MamboDMA.Games
             ImGui.Separator();
             ImGui.End();
 
-            // Service · Control window (manual VMM actions only when you click)
+            // Service · Control window
             ImGui.Begin("Service · Control", ImGuiWindowFlags.NoCollapse);
 
-            var s = Snapshots.Current;
-
-            // ─────────────────────────────────────────────────────────────────────────────
+            // ─────────────────────────────────────────────────────────────
             // Top status (folded)
             bool fStatus = BeginFold("svc.status", "Status", defaultOpen: true);
             if (fStatus)
             {
                 ImGui.TextColored(new Vector4(0.6f, 0.8f, 1f, 1f), s.Status);
                 ImGui.Separator();
+                ImGui.TextDisabled($"VMM Ready: {VmmInnit} | Attached: {AttachedToProccess} | PID: {s.Pid} | Base: 0x{s.MainBase:X}");
                 EndFold(fStatus);
             }
 
-            // ─────────────────────────────────────────────────────────────────────────────
+            // ─────────────────────────────────────────────────────────────
             // VMM controls (folded)
             bool fVmm = BeginFold("svc.vmm", "VMM Controls", defaultOpen: true);
             if (fVmm)
@@ -70,23 +116,32 @@ namespace MamboDMA.Games
                 EndFold(fVmm);
             }
 
-            // ─────────────────────────────────────────────────────────────────────────────
+            // ─────────────────────────────────────────────────────────────
             // Attach & Processes (folded)
-            bool fProc = BeginFold("svc.proc", "Attach & Processes", defaultOpen: false);
+            bool fProc = BeginFold("svc.proc", "Attach & Processes", defaultOpen: true);
             if (fProc)
             {
-                // Manual refresh
+                // Live search
+                ImGui.SetNextItemWidth(260);
+                ImGui.InputTextWithHint("##proc_filter", "Search processes…", ref _procFilter, 256);
+
+                ImGui.SameLine();
                 if (ImGui.Button("Refresh Processes"))
                     VmmService.RefreshProcesses();
 
                 ImGui.Separator();
                 ImGui.Text("Processes:");
 
+                var procs = s.Processes ?? Array.Empty<DmaMemory.ProcEntry>();
+                var filtered = FilterProcesses(procs, _procFilter).ToArray();
+
+                if (_procSelectedIndex >= filtered.Length) _procSelectedIndex = -1;
+
                 if (ImGui.BeginChild("proc_child", new Vector2(0, 150), ImGuiChildFlags.None))
                 {
-                    for (int i = 0; i < s.Processes.Count(); i++)
+                    for (int i = 0; i < filtered.Length; i++)
                     {
-                        var p = s.Processes[i];
+                        var p = filtered[i];
                         bool sel = (i == _procSelectedIndex);
                         if (ImGui.Selectable($"{p.Pid,6}  {p.Name}{(p.IsWow64 ? " (Wow64)" : "")}", sel))
                             _procSelectedIndex = i;
@@ -94,14 +149,14 @@ namespace MamboDMA.Games
                     ImGui.EndChild();
                 }
 
-                if (_procSelectedIndex >= 0 && _procSelectedIndex < s.Processes.Count())
+                if (_procSelectedIndex >= 0 && _procSelectedIndex < filtered.Length)
                 {
-                    var chosen = s.Processes[_procSelectedIndex];
+                    var chosen = filtered[_procSelectedIndex];
                     ImGui.TextColored(new Vector4(0.6f, 1f, 0.6f, 1f),
                         $"Selected: {chosen.Name} (PID {chosen.Pid})");
 
                     if (ImGui.Button("Attach Selected"))
-                        VmmService.Attach(chosen.Name);
+                        VmmService.Attach(chosen.Name); // modules auto-refresh on attach transition
                 }
                 else
                 {
@@ -110,23 +165,31 @@ namespace MamboDMA.Games
                 EndFold(fProc);
             }
 
-            // ─────────────────────────────────────────────────────────────────────────────
+            // ─────────────────────────────────────────────────────────────
             // Modules (folded)
-            bool fMods = BeginFold("svc.mods", "Modules", defaultOpen: false);
+            bool fMods = BeginFold("svc.mods", "Modules", defaultOpen: true);
             if (fMods)
             {
+                ImGui.SetNextItemWidth(260);
+                ImGui.InputTextWithHint("##mod_filter", "Search modules…", ref _modFilter, 256);
+
+                ImGui.SameLine();
                 if (ImGui.Button("Refresh Modules")) VmmService.RefreshModules();
+
                 ImGui.Text("Modules:");
+                var mods = s.Modules ?? Array.Empty<DmaMemory.ModuleInfo>();
+                var mFiltered = FilterModules(mods, _modFilter).ToArray();
+
                 if (ImGui.BeginChild("mods_child", new Vector2(0, 150), ImGuiChildFlags.None))
                 {
-                    foreach (var m in s.Modules)
+                    foreach (var m in mFiltered)
                         ImGui.TextUnformatted($"{m.Name,-28} Base=0x{m.Base:X} Size=0x{m.Size:X}");
                     ImGui.EndChild();
                 }
                 EndFold(fMods);
             }
 
-            // ─────────────────────────────────────────────────────────────────────────────
+            // ─────────────────────────────────────────────────────────────
             // Display & Frame pacing (folded)
             bool fDisp = BeginFold("svc.display", "Display & Frame Pacing", defaultOpen: true);
             if (fDisp)
@@ -134,16 +197,61 @@ namespace MamboDMA.Games
                 DrawMonitorSettings();   // uses your existing function
                 EndFold(fDisp);
             }
-            // ─────────────────────────────────────────────────────────────────────────────
-            // Input Manager & Makcu (folded)
+
+            // ─────────────────────────────────────────────────────────────
+            // Input Manager & Makcu (folded) + safety: only when VmmInnit
             DrawInputManager();
-            // ─────────────────────────────────────────────────────────────────────────────
+
+            // ─────────────────────────────────────────────────────────────
             // Top Info Bar
             DrawTopInfoBar();
 
             ImGui.End();
         }
 
+        private static IEnumerable<DmaMemory.ProcEntry> FilterProcesses(IEnumerable<DmaMemory.ProcEntry> list, string filter)
+        {
+            if (string.IsNullOrWhiteSpace(filter))
+                return list;
+            filter = filter.Trim();
+            bool allDigits = filter.All(char.IsDigit);
+            return list.Where(p =>
+                (!allDigits && p.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)) ||
+                (allDigits && p.Pid.ToString().Contains(filter, StringComparison.Ordinal)));
+        }
+
+        private static IEnumerable<DmaMemory.ModuleInfo> FilterModules(IEnumerable<DmaMemory.ModuleInfo> list, string filter)
+        {
+            if (string.IsNullOrWhiteSpace(filter))
+                return list;
+            filter = filter.Trim();
+            return list.Where(m =>
+                m.Name.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                $"0x{m.Base:X}".Contains(filter, StringComparison.OrdinalIgnoreCase));
+        }
+        private static void LoadLastGameOnce(string[] names)
+        {
+            if (_loadedLastGame) return;
+            _loadedLastGame = true;
+            try
+            {
+                if (File.Exists(_lastGamePath))
+                {
+                    var wanted = (File.ReadAllText(_lastGamePath) ?? "").Trim();
+                    if (!string.IsNullOrEmpty(wanted) &&
+                        names.Any(n => string.Equals(n, wanted, StringComparison.Ordinal)))
+                    {
+                        GameRegistry.Select(wanted);
+                    }
+                }
+            }
+            catch { /* ignore */ }
+        }
+
+        private static void SaveLastGame(string name)
+        {
+            try { File.WriteAllText(_lastGamePath, name ?? ""); } catch { /* ignore */ }
+        }
 
         public static void DrawCombo(string label = "Game")
         {
@@ -154,7 +262,11 @@ namespace MamboDMA.Games
                 return;
             }
 
-            // If nothing active yet, pick the first (does not Start() workers)
+            // Try to restore last selection once on first draw (doesn't start workers)
+            if (GameRegistry.Active is null)
+                LoadLastGameOnce(names);
+
+            // If still nothing active (no saved file or invalid), pick first (does not Start() workers)
             if (GameRegistry.Active is null)
                 GameRegistry.Select(names[0]);
 
@@ -169,7 +281,10 @@ namespace MamboDMA.Games
                 {
                     bool selected = (i == cur);
                     if (ImGui.Selectable(names[i], selected) && i != cur)
+                    {
                         GameRegistry.Select(names[i]);
+                        SaveLastGame(names[i]);   // persist new choice
+                    }
                     if (selected) ImGui.SetItemDefaultFocus();
                 }
                 ImGui.EndCombo();
@@ -214,7 +329,7 @@ namespace MamboDMA.Games
             if (b == 0) // Apply
             {
                 Misc.ApplyMonitorSelection(_selectedMonitor, _applyBorderless, _applyFullscreen);
-            
+
                 // update global screen settings
                 ScreenService.UpdateFromMonitor(_selectedMonitor);
             }
@@ -230,6 +345,7 @@ namespace MamboDMA.Games
             ImGui.Separator();
             ImGui.TextDisabled("Tip: Borderless + sizing to monitor gives a clean fullscreen feel without Alt-Tab quirks.");
         }
+
         private static Texture2D _logoTex;
         private static void EnsureLogo()
         {
@@ -380,29 +496,30 @@ namespace MamboDMA.Games
             ImGui.Separator();
             ImGui.TextDisabled("Input Manager");
 
+            // SAFETY: block init unless VmmInnit == true
+            if (!VmmInnit) ImGui.BeginDisabled();
             if (ImGui.Button("Init InputManager"))
             {
-                if (DmaMemory.Vmm is null)
+                JobSystem.Schedule(() =>
                 {
-                    Console.WriteLine("[-] Cannot initialize InputManager: VMM not ready");
-                }
-                else
-                {
-                    JobSystem.Schedule(() =>
-                    {
-                        var adapter = new DmaMemory.VmmSharpExAdapter(DmaMemory.Vmm);
-                        Input.InputManager.BeginInitializeWithRetries(
-                            adapter,
-                            TimeSpan.FromSeconds(1),
-                            onComplete: (ok, err) =>
-                            {
-                                if (ok) Console.WriteLine("[+] InputManager ready.");
-                                else Console.WriteLine($"[-] InputManager init failed: {err}");
-                            });
-                        _inputInitialized = true;
-                    });
-                }
+                    var adapter = new DmaMemory.VmmSharpExAdapter(DmaMemory.Vmm!);
+                    Input.InputManager.BeginInitializeWithRetries(
+                        adapter,
+                        TimeSpan.FromSeconds(1),
+                        onComplete: (ok, err) =>
+                        {
+                            if (ok) Console.WriteLine("[+] InputManager ready.");
+                            else Console.WriteLine($"[-] InputManager init failed: {err}");
+                        });
+                    _inputInitialized = true;
+                });
             }
+            if (!VmmInnit)
+            {
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Init blocked: VMM not initialized.");
+                ImGui.EndDisabled();
+            }
+
             ImGui.SameLine();
             if (ImGui.Button("Shutdown InputManager"))
             {
@@ -437,7 +554,5 @@ namespace MamboDMA.Games
             ImGui.SameLine();
             ImGui.TextDisabled(label);
         }
-
-               
     }
 }

@@ -1,83 +1,84 @@
 using System;
 using System.Numerics;
+using System.Runtime.InteropServices;
+using static MamboDMA.Games.ABI.ABICache;
 
 namespace MamboDMA.Games.ABI
 {
+    //©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+    // Math for W2S
+    //©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
     public static class ABIMath
     {
-        public static Vector3 Sub(Vector3 a, Vector3 b) =>
-            new(a.X - b.X, a.Y - b.Y, a.Z - b.Z);
-
-        public static float Dot(Vector3 a, Vector3 b) =>
-            a.X * b.X + a.Y * b.Y + a.Z * b.Z;
-
-        /// <summary>
-        /// Builds Unreal-style orientation axes from pitch/yaw/roll.
-        /// </summary>
-        public static void GetAxes(Vector3 rot, out Vector3 x, out Vector3 y, out Vector3 z)
+        private static Matrix4x4 RotationMatrix(Vector3 rotDeg)
         {
-            float pitch = rot.X * (float)Math.PI / 180f;
-            float yaw   = rot.Y * (float)Math.PI / 180f;
-            float roll  = rot.Z * (float)Math.PI / 180f;
+            float radPitch = rotDeg.X * (MathF.PI / 180f);
+            float radYaw   = rotDeg.Y * (MathF.PI / 180f);
+            float radRoll  = rotDeg.Z * (MathF.PI / 180f);
 
-            float sp = MathF.Sin(pitch);
-            float cp = MathF.Cos(pitch);
-            float sy = MathF.Sin(yaw);
-            float cy = MathF.Cos(yaw);
-            float sr = MathF.Sin(roll);
-            float cr = MathF.Cos(roll);
+            float SP = MathF.Sin(radPitch), CP = MathF.Cos(radPitch);
+            float SY = MathF.Sin(radYaw),   CY = MathF.Cos(radYaw);
+            float SR = MathF.Sin(radRoll),  CR = MathF.Cos(radRoll);
 
-            // Unreal forward (X), right (Y), up (Z)
-            x = new Vector3(cp * cy, cp * sy, sp);
-            y = new Vector3(cy * sp * sr - cr * sy, sy * sp * sr + cr * cy, -sr * cp);
-            z = new Vector3(-(cr * sp * cy + sr * sy), cy * sr - cr * sp * sy, cr * cp);
+            return new Matrix4x4
+            {
+                M11 = CP * CY,
+                M12 = CP * SY,
+                M13 = SP,
+
+                M21 = SR * SP * CY - CR * SY,
+                M22 = SR * SP * SY + CR * CY,
+                M23 = -SR * CP,
+
+                M31 = -(CR * SP * CY + SR * SY),
+                M32 = CY * SR - CR * SP * SY,
+                M33 = CR * CP
+            };
         }
 
-        /// <summary>
-        /// Projects a 3D world position to 2D screen coordinates (Unreal left-handed).
-        /// </summary>
-        public static bool WorldToScreen(Vector3 world, out Vector2 screen, CameraInfo cam, float width, float height)
+        public static bool WorldToScreen(Vector3 pos, ABICache.FMinimalViewInfo cam, float width, float height, out Vector2 s)
         {
-            screen = Vector2.Zero;
+            var rot = new Vector3(cam.Rotation.Pitch, cam.Rotation.Yaw, cam.Rotation.Roll);
+            Matrix4x4 m = RotationMatrix(rot);
 
-            // World to camera space
-            Vector3 delta = Sub(world, cam.Position);
-            Vector3 transformed = new(
-                Dot(delta, cam.AxisX),
-                Dot(delta, cam.AxisY),
-                Dot(delta, cam.AxisZ)
+            Vector3 axisX = new(m.M11, m.M12, m.M13);
+            Vector3 axisY = new(m.M21, m.M22, m.M23);
+            Vector3 axisZ = new(m.M31, m.M32, m.M33);
+
+            Vector3 delta = pos - cam.Location;
+
+            Vector3 t = new(
+                Vector3.Dot(delta, axisY),
+                Vector3.Dot(delta, axisZ),
+                Vector3.Dot(delta, axisX)
             );
 
-            // Unreal's camera looks along +X (forward)
-            if (transformed.X <= 1f) return false;
+            if (t.Z < 1f) { s = default; return false; }
 
-            float fovRad = cam.Fov * (float)Math.PI / 180f;
-            float tanHalfFov = MathF.Tan(fovRad / 2f);
-            float cx = width * 0.5f;
-            float cy = height * 0.5f;
+            float cx = width * 0.5f, cy = height * 0.5f;
+            float fovRad = cam.Fov * (MathF.PI / 180f);
+            float focal = cx / MathF.Tan(fovRad * 0.5f);
 
-            screen.X = cx - (transformed.Y * cx) / (tanHalfFov * transformed.X);
-            screen.Y = cy - (transformed.Z * cx) / (tanHalfFov * transformed.X);
+            s.X = cx + t.X * focal / t.Z;
+            s.Y = cy - t.Y * focal / t.Z;
 
-            return screen.X >= 0 && screen.X <= width && screen.Y >= 0 && screen.Y <= height;
+            return (s.X >= 0 && s.Y >= 0 && s.X <= width && s.Y <= height);
         }
-
-        public static float Distance(Vector3 a, Vector3 b) =>
-            MathF.Sqrt((a.X - b.X) * (a.X - b.X) +
-                       (a.Y - b.Y) * (a.Y - b.Y) +
-                       (a.Z - b.Z) * (a.Z - b.Z));
-
-        public static float CrosshairDistance(Vector2 a, Vector2 b) =>
-            MathF.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
     }
 
-    public struct CameraInfo
+    //©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+    // Math/Structs for bone transforms
+    //©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct FQuat { public float X, Y, Z, W; }
+    
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct FTransform
     {
-        public Vector3 Position;
-        public Vector3 Rotation;
-        public Vector3 AxisX;
-        public Vector3 AxisY;
-        public Vector3 AxisZ;
-        public float   Fov;
+        public FQuat   Rotation;     // 0x00 (16)
+        public Vector3 Translation;  // 0x10 (12)
+        private float  _pad0;        // 0x1C (4)
+        public Vector3 Scale3D;      // 0x20 (12)
+        private float  _pad1;        // 0x2C (4)
     }
 }

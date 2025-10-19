@@ -10,8 +10,10 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using MamboDMA.Input;
+using MamboDMA.Services;
 using VmmSharpEx;
 using VmmSharpEx.Scatter;
+using VmmSharpEx.Scatter.V2;
 using VFlags = VmmSharpEx.Options.VmmFlags;
 
 namespace MamboDMA;
@@ -41,7 +43,7 @@ public static class DmaMemory
 
         if (applyMMap)
         {
-            try { _ = _vmm.GetMemoryMap(applyMap: true, outputFile: "mmap.txt"); } catch { /* best-effort */ }
+            try { _ = _vmm.GetMemoryMap(applyMap: true, outputFile: "mmap.txt"); } catch { Logger.Warn("Failed to apply memory map.");}
         }
     }
 
@@ -235,7 +237,7 @@ public static class DmaMemory
     public static T[]? ReadArray<T>(ulong address, int count) where T : unmanaged
     {
         EnsureAttached();
-        return _vmm!.MemReadArray<T>(Pid, address, count);
+        return _vmm!.MemReadArray<T>(Pid, address, count)?.ToArray();
     }
 
     /// <summary>Read raw bytes. Returns null on failure. If fewer bytes were read than requested, the array is resized.</summary>
@@ -255,13 +257,39 @@ public static class DmaMemory
         }
         return buf;
     }
-
+    public static string ReadObjectName(ulong obj)
+    {
+        try
+        {
+            ulong namePtr = DmaMemory.Read<ulong>(obj + 0x10);
+            if (namePtr == 0) return "";
+            return ReadUnicodeString(namePtr, 64);
+        }
+        catch
+        {
+            return "";
+        }
+    }
     public static string? ReadString(ulong address, int bytes, Encoding enc)
     {
         EnsureAttached();
         return _vmm!.MemReadString(Pid, address, bytes, enc);
     }
-
+    public static string ReadUnicodeString(ulong address, uint maxLength = 128)
+    {
+        if (address == 0) return "";
+        try
+        {
+            byte[] bytes = DmaMemory.ReadBytes(address, maxLength * 2); // 2 bytes per char
+            int zeroIndex = Array.FindIndex(bytes, 0, b => b == 0);
+            if (zeroIndex <= 0) zeroIndex = bytes.Length;
+            return System.Text.Encoding.Unicode.GetString(bytes, 0, zeroIndex);
+        }
+        catch
+        {
+            return "";
+        }
+    }
     public static string ReadAsciiZ(ulong address, int max = 256, VmmFlags flags = VmmFlags.NONE)
     {
         if (max <= 0) max = 1;
@@ -360,6 +388,7 @@ public static class DmaMemory
         while (true)
         {
             if (_vmm!.PidGetFromName(exe, out var pid) && pid != 0) return pid;
+            Logger.Info($"Waiting for process '{exe}'...");
             Thread.Sleep(300);
         }
     }
@@ -371,6 +400,7 @@ public static class DmaMemory
         {
             var b = _vmm!.ProcessGetModuleBase(pid, module);
             if (b != 0) return b;
+            Logger.Info($"Waiting for module '{module}' in PID {pid}...");
             Thread.Sleep(300);
         }
     }

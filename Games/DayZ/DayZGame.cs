@@ -14,6 +14,9 @@ namespace MamboDMA.Games.DayZ
         private bool _initialized;
         private bool _running;
 
+        // Change this if your process name differs.
+        private const string _dayzExe = "DayZ_x64.exe";
+
         private static DayZConfig Cfg => Config<DayZConfig>.Settings;
 
         public void Initialize()
@@ -30,6 +33,14 @@ namespace MamboDMA.Games.DayZ
         public void Start()
         {
             if (_running) return;
+
+            // Safety: only start when attached
+            if (!MamboDMA.DmaMemory.IsAttached)
+            {
+                // Optional: log or tooltip is handled in UI; just bail here.
+                return;
+            }
+
             DayZUpdater.Start();
             _running = true;
         }
@@ -47,14 +58,41 @@ namespace MamboDMA.Games.DayZ
         {
             Config<DayZConfig>.DrawConfigPanel(Name, cfg =>
             {
-                var snap = DayZSnapshots.Current;
-                var ready = MamboDMA.DmaMemory.IsVmmReady && MamboDMA.DmaMemory.IsAttached;
-                var color = ready ? new Vector4(0, 0.8f, 0, 1) : new Vector4(1f, 0.3f, 0.2f, 1);
-                DrawStatusInline(color, ready ? "Attached & Ready" : "Attach in Home tab first");
+                bool vmmReady = MamboDMA.DmaMemory.IsVmmReady;
+                bool attached = MamboDMA.DmaMemory.IsAttached;
 
-                if (!ready) return;
+                // ───────────────────────────────
+                // Quick VMM setup (no process list)
+                ImGui.TextDisabled("Quick Setup");
+                if (!vmmReady)
+                {
+                    if (ImGui.Button("Init VMM"))
+                    {
+                        // Snapshots.VmmReady will update on success
+                        VmmService.InitOnly();
+                    }
+                    ImGui.SameLine();
+                    ImGui.TextDisabled("← initialize before attaching");
+                }
+                else if (!attached)
+                {
+                    if (ImGui.Button($"Attach ({_dayzExe})"))
+                    {
+                        // Non-blocking attach; Snapshots will update on success
+                        VmmService.Attach(_dayzExe);
+                    }
+                    ImGui.SameLine();
+                    ImGui.TextDisabled("← attaches without process picker");
+                }
 
-                var cam = DayZUpdater.DayZCameraSnapshots.Current;
+                // Status light
+                var color = (vmmReady && attached) ? new Vector4(0, 0.8f, 0, 1) : new Vector4(1f, 0.3f, 0.2f, 1);
+                DrawStatusInline(color, (vmmReady && attached) ? "Attached & Ready" : "Not attached");
+
+                // If not attached yet, stop here to prevent any crashes
+                if (!attached) return;
+
+                var cam  = DayZUpdater.DayZCameraSnapshots.Current;
                 var ents = DayZUpdater.EntitySnapshots.Current;
 
                 // ESP drawing
@@ -85,24 +123,29 @@ namespace MamboDMA.Games.DayZ
                     cfg.ShowRawDebug = showRawDebug;
 
                 ImGui.Separator();
+
+                // Start/Stop buttons with safety
+                if (!attached) ImGui.BeginDisabled();
                 if (ImGui.Button(_running ? "Restart Workers" : "Start Workers"))
                 {
                     if (_running) { Stop(); Start(); }
                     else { Start(); }
                 }
+                if (!attached) ImGui.EndDisabled();
+
                 ImGui.SameLine();
                 if (ImGui.Button("Stop Workers")) Stop();
             });
 
             // ─────────────────────────────
-            // Separate Debug Window
+            // Separate Debug Window — only when attached
             // ─────────────────────────────
-            if (Cfg.ShowRawDebug)
+            if (Cfg.ShowRawDebug && MamboDMA.DmaMemory.IsAttached)
             {
                 ImGui.Begin("DayZ Debug", ImGuiWindowFlags.AlwaysAutoResize);
 
                 var snap = DayZSnapshots.Current;
-                var cam = DayZUpdater.DayZCameraSnapshots.Current;
+                var cam  = DayZUpdater.DayZCameraSnapshots.Current;
                 var ents = DayZUpdater.EntitySnapshots.Current;
 
                 if (ImGui.CollapsingHeader("World / Manager", ImGuiTreeNodeFlags.DefaultOpen))

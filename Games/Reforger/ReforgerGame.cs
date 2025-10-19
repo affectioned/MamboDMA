@@ -10,6 +10,7 @@ using static MamboDMA.OverlayWindow;
 using static MamboDMA.Misc;
 using Raylib_cs;
 using MamboDMA.Gui;
+using MamboDMA.Services; // VmmService
 
 namespace MamboDMA.Games.Reforger
 {
@@ -52,13 +53,24 @@ namespace MamboDMA.Games.Reforger
         public void Start()
         {
             if (_running) return;
+
+            // Provide external accessors but DO NOT start workers unless attached.
             DmaMemory.AttachExternal(
                 () => (DmaMemory.IsAttached, DmaMemory.Pid, DmaMemory.Base),
                 addr => DmaMemory.Read(addr, out ulong v) ? (true, v) : (false, 0UL),
                 (addr, size) => DmaMemory.ReadBytes(addr, (uint)size)
             );
-            Players.StartWorkers();
-            _running = true;
+
+            if (DmaMemory.IsAttached)
+            {
+                Players.StartWorkers();
+                _running = true;
+            }
+            else
+            {
+                // Not attached yet; workers will be started when user clicks "Start Workers" after attaching.
+                _running = false;
+            }
         }
 
         public void Stop()
@@ -70,29 +82,33 @@ namespace MamboDMA.Games.Reforger
 
         public void Tick()
         {
+            // If not attached, skip any memory-driven logic to avoid crashes.
+            if (!MamboDMA.DmaMemory.IsAttached)
+                return;
+
             // Update camera first — always before projecting bones
             Game.UpdateCamera();
-        
+
             var cfg = Cfg;
             Players.MaxDrawDistance = cfg.MaxDrawDistance;
-            Players.FrameCap = cfg.FrameCap;
-            Players.FastIntervalMs = cfg.FastIntervalMs;
-            Players.HpIntervalMs = cfg.HpIntervalMs;
-            Players.SlowIntervalMs = cfg.SlowIntervalMs;
-        
-            Players.IncludeFriendlies = cfg.IncludeFriendlies;
-            Players.OnlyPlayersFromPlayerManager = cfg.OnlyPlayersFromManager;
-            Players.RequireHitZones = cfg.RequireHitZones;
-            Players.IncludeRagdolls = cfg.IncludeRagdolls;
-            Players.AnimatedOnly = cfg.AnimatedOnly;
-        
-            Players.EnableSkeletons = cfg.EnableSkeletons;
-            Players.SkeletonLevel = (ArmaReforgerFeeder.Players.SkeletonDetail)cfg.SkeletonLevel;
-            Players.SkeletonThickness = cfg.SkeletonThickness;
-        
+            Players.FrameCap        = cfg.FrameCap;
+            Players.FastIntervalMs  = cfg.FastIntervalMs;
+            Players.HpIntervalMs    = cfg.HpIntervalMs;
+            Players.SlowIntervalMs  = cfg.SlowIntervalMs;
+
+            Players.IncludeFriendlies              = cfg.IncludeFriendlies;
+            Players.OnlyPlayersFromPlayerManager   = cfg.OnlyPlayersFromManager;
+            Players.RequireHitZones                = cfg.RequireHitZones;
+            Players.IncludeRagdolls                = cfg.IncludeRagdolls;
+            Players.AnimatedOnly                   = cfg.AnimatedOnly;
+
+            Players.EnableSkeletons                = cfg.EnableSkeletons;
+            Players.SkeletonLevel                  = (ArmaReforgerFeeder.Players.SkeletonDetail)cfg.SkeletonLevel;
+            Players.SkeletonThickness              = cfg.SkeletonThickness;
+
             // Make sure bones use the current frame camera before projection
             Players.PublishLatestToUI();
-        
+
             _vehicles = GameObjects.LatestVehicles ?? Array.Empty<GameObjects.VehicleDto>();
             _items    = GameObjects.LatestItems    ?? Array.Empty<GameObjects.ItemDto>();
         }
@@ -101,10 +117,46 @@ namespace MamboDMA.Games.Reforger
         {
             Config<ReforgerConfig>.DrawConfigPanel(Name, cfg =>
             {
-                var ready = MamboDMA.DmaMemory.IsVmmReady && MamboDMA.DmaMemory.IsAttached;
-                var color = ready ? new Vector4(0, 0.8f, 0, 1) : new Vector4(1f, 0.3f, 0.2f, 1);
-                DrawStatusInline(color, ready ? "Attached & Ready" : "Attach in Home tab first");
+                bool vmmReady = MamboDMA.DmaMemory.IsVmmReady;
+                bool attached = MamboDMA.DmaMemory.IsAttached;
+
+                // ───────────────────────────────
+                // Quick VMM setup for Reforger (no process list)
+                ImGui.TextDisabled("Quick Setup");
+                if (!vmmReady)
+                {
+                    if (ImGui.Button("Init VMM"))
+                    {
+                        // Will set Snapshots.VmmReady=true on success
+                        VmmService.InitOnly();
+                    }
+                    ImGui.SameLine();
+                    ImGui.TextDisabled("← initialize before attaching");
+                }
+                else if (!attached)
+                {
+                    if (ImGui.Button("Attach (ArmaReforgerSteam.exe)"))
+                    {
+                        // Non-blocking attach; Snapshots will update on success,
+                        // which GameSelector picks up to set its flags true next frame.
+                        VmmService.Attach("ArmaReforgerSteam.exe");
+                    }
+                    ImGui.SameLine();
+                    ImGui.TextDisabled("← attaches without process picker");
+                }
+
+                // Status light
+                var color = (vmmReady && attached) ? new Vector4(0, 0.8f, 0, 1) : new Vector4(1f, 0.3f, 0.2f, 1);
+                DrawStatusInline(color, (vmmReady && attached) ? "Attached & Ready" : "Not attached");
+
                 ImGui.Separator();
+
+                // If not attached yet, show a hint and early out of the rest of the panel (prevents crashes).
+                if (!attached)
+                {
+                    ImGui.TextDisabled("Attach to ArmaReforgerSteam.exe to enable ESP & workers.");
+                    return;
+                }
 
                 // ───────────────────────────────
                 if (ImGui.CollapsingHeader("General Filters"))
@@ -199,18 +251,32 @@ namespace MamboDMA.Games.Reforger
                 ImGui.Separator();
                 if (ImGui.Button(_running ? "Restart Workers" : "Start Workers"))
                 {
-                    if (_running) { Players.StopWorkers(); Players.StartWorkers(); }
-                    else { Start(); }
+                    if (!_running)
+                    {
+                        // Only start workers if attached
+                        if (MamboDMA.DmaMemory.IsAttached)
+                        {
+                            Start();
+                        }
+                    }
+                    else
+                    {
+                        Players.StopWorkers();
+                        Players.StartWorkers();
+                    }
                 }
                 ImGui.SameLine();
                 if (ImGui.Button("Stop Workers")) Stop();
             });
 
-            DrawActorsOverlay();
-            DrawVehiclesOverlay();
-            DrawItemsOverlay();        
-    }
-
+            // Only draw overlays when attached
+            if (MamboDMA.DmaMemory.IsAttached)
+            {
+                DrawActorsOverlay();
+                DrawVehiclesOverlay();
+                DrawItemsOverlay();
+            }
+        }
 
         private static void DrawStatusInline(Vector4 color, string caption)
         {
@@ -305,6 +371,7 @@ namespace MamboDMA.Games.Reforger
                 }
             }
         }
+
         private static void DrawVehiclesOverlay()
         {
             var list = _vehicles;
