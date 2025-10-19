@@ -67,7 +67,7 @@ namespace MamboDMA
 
             // Optional default selection (no Start() happens here):
             // If you want no default, just skip this and the combo shows the first name.
-            GameRegistry.Select("ExampleGame");
+            //GameRegistry.Select("ExampleGame");
             
             Image icon = Raylib.LoadImage("Assets/Img/Logo.png");
             Raylib.SetWindowIcon(icon);
