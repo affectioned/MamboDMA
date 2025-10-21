@@ -31,6 +31,11 @@
 	<ItemGroup>
 	  <None Include="Assets\Fonts\**\*.ttf" CopyToOutputDirectory="PreserveNewest" />
 	  <None Include="Assets\Img\**\*.png" CopyToOutputDirectory="PreserveNewest" />
+	  <None Include="Assets\Games\ABI\**\*.png" CopyToOutputDirectory="PreserveNewest" />
+	  <None Include="Assets\WebRadar\**\*.css" CopyToOutputDirectory="PreserveNewest" />
+	  <None Include="Assets\WebRadar\**\*.html" CopyToOutputDirectory="PreserveNewest" />
+	  <None Include="Assets\WebRadar\**\*.png" CopyToOutputDirectory="PreserveNewest" />
+	  <None Include="Assets\WebRadar\**\*.js" CopyToOutputDirectory="PreserveNewest" />
 	  <None Include="Assets\Img\**\*.svg" CopyToOutputDirectory="PreserveNewest" />
 	  <None Include="Assets\Img\**\*.ico" CopyToOutputDirectory="PreserveNewest" />
 	</ItemGroup>

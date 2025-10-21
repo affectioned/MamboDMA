@@ -28,6 +28,7 @@ namespace MamboDMA.Games.ABI
 
         public const ulong ACharacter_Mesh = 0x380;
         public const ulong APlayerCameraManager_CameraCachePrivate = 0x2090;
+        public const ulong APlayerCameraManager_LastFrameCameraCachePrivate = 0x27C0;
 
         public const ulong ULevel_ActorArray = 0x98;
         public const ulong ULevel_ActorCount = 0xA0;

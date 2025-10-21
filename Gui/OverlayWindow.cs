@@ -45,8 +45,15 @@ public sealed class OverlayWindow : IDisposable
 
             rlImGui.Begin();
             DockspaceOverMainViewport();
-            drawUI();
+            drawUI();               // your app UI
             rlImGui.End();
+
+            // NEW: multi-viewport support
+            if ((ImGui.GetIO().ConfigFlags & ImGuiConfigFlags.ViewportsEnable) != 0)
+            {
+                ImGui.UpdatePlatformWindows();
+                ImGui.RenderPlatformWindowsDefault();
+            }
 
             Raylib.EndDrawing();
         }
@@ -83,6 +90,7 @@ public sealed class OverlayWindow : IDisposable
     {
         var io = ImGui.GetIO();
         io.ConfigFlags |= ImGuiConfigFlags.DockingEnable;
+        io.ConfigFlags |= ImGuiConfigFlags.ViewportsEnable;
         ImGui.StyleColorsDark();
 
         var style = ImGui.GetStyle();
@@ -91,7 +99,11 @@ public sealed class OverlayWindow : IDisposable
         style.GrabRounding = 8f;
 
         const float baseSize = 16f;
-
+        if ((io.ConfigFlags & ImGuiConfigFlags.ViewportsEnable) != 0)
+        {
+            style.WindowRounding = 6f; // you can set 0 if you prefer sharp corners
+            style.Colors[(int)ImGuiCol.WindowBg].W = 1.00f;
+        }
         // Create native font config
         ImFontConfigPtr cfg = ImGuiNative.ImFontConfig_ImFontConfig();
         cfg.OversampleH = 3;

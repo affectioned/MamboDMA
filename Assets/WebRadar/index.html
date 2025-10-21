@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>MamboDMA Web Radar</title>
+<link rel="stylesheet" href="radar.css"/>
+</head>
+<body>
+<div id="topbar">
+  <div class="left">
+    <select id="mapSel" title="Map">
+      <option value="Farm">Farm</option>
+      <option value="Valley">Valley</option>
+    </select>
+
+    <input id="serverUrl" type="text" placeholder="http://localhost:8088">
+    <button id="btnConnect">Connect</button>
+    <button id="btnCopy">Copy Mapping</button>
+    <span id="status">disconnected</span>
+  </div>
+
+  <div class="controls">
+    <label>Zoom <input id="zoom" type="range" min="0.25" max="4" step="0.05" value="0.5"/></label>
+    <label>cm/px <input id="cmpp" type="number" step="1" value="100"/></label>
+    <label>CenterX <input id="cx" type="number" step="1" value="0"/></label>
+    <label>CenterY <input id="cy" type="number" step="1" value="0"/></label>
+    <label><input id="swapxy" type="checkbox"> Swap XY</label>
+    <label><input id="flipx"  type="checkbox"> Flip X</label>
+    <label><input id="flipy"  type="checkbox"> Flip Y</label>
+  </div>
+</div>
+
+<div id="panelbar">
+  <div class="panel">
+    <strong>Filters</strong>
+    <label><input id="fSelf" type="checkbox" checked> Self</label>
+    <label><input id="fPMCs" type="checkbox" checked> PMCs</label>
+    <label><input id="fBots" type="checkbox" checked> Bots</label>
+    <label><input id="fDead" type="checkbox" checked> Dead</label>
+    <label title="Only draw actors within this range of your position">
+      Max Range (m)
+      <input id="maxRange" type="number" min="0" step="10" value="2000">
+    </label>
+  </div>
+
+  <div class="panel">
+    <strong>Icon Sizes</strong>
+    <label>Self <input id="szSelf" type="number" min="2" max="30" step="1" value="7"></label>
+    <label>PMC <input id="szPMC"  type="number" min="2" max="30" step="1" value="5"></label>
+    <label>Bot <input id="szBot"  type="number" min="2" max="30" step="1" value="4"></label>
+    <label>Dead <input id="szDead" type="number" min="2" max="30" step="1" value="6"></label>
+  </div>
+
+  <div class="panel">
+    <strong>Colors</strong>
+    <label>Self <input id="colSelf" type="color" value="#19ff6a"></label>
+    <label>PMC  <input id="colPMC"  type="color" value="#ff4a4a"></label>
+    <label>Bot  <input id="colBot"  type="color" value="#0db1ff"></label>
+    <label>Dead <input id="colDead" type="color" value="#ffd600"></label>
+  </div>
+</div>
+
+<div id="wrap">
+  <canvas id="radar"></canvas>
+</div>
+
+<script src="radar.js"></script>
+</body>
+</html>

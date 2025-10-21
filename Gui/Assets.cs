@@ -10,22 +10,57 @@ namespace MamboDMA.Gui
     public static class Assets
     {
         public static Texture2D Logo;
-
+        public static Texture2D ABIRadarMap;
+        public static Vector2   ABIRadarMapSize;
+        public static IntPtr    ABIRadarMapImGuiId; // ImGui texture handle (OpenGL id)
         public static void Load()
         {
-            if (Logo.Id != 0) return; // already loaded
-            var img = Raylib.LoadImage("Assets/Img/Logo.png");
-            Logo = Raylib.LoadTextureFromImage(img);
-            Raylib.UnloadImage(img);
+            if (Logo.Id == 0)
+            {
+                var img = Raylib.LoadImage("Assets/Img/Logo.png");
+                Logo = Raylib.LoadTextureFromImage(img);
+                Raylib.UnloadImage(img);
+            }
         }
 
         public static void Unload()
         {
-            if (Logo.Id != 0)
+            if (Logo.Id != 0) { Raylib.UnloadTexture(Logo); Logo = new Texture2D(); }
+
+            if (ABIRadarMap.Id != 0)
             {
-                Raylib.UnloadTexture(Logo);
-                Logo = new Texture2D();
+                Raylib.UnloadTexture(ABIRadarMap);
+                ABIRadarMap = new Texture2D();
+                ABIRadarMapSize = default;
+                ABIRadarMapImGuiId = IntPtr.Zero;
             }
+        }
+
+        // Load any png/jpg to a Raylib texture (and return an ImGui-ready handle)
+        public static unsafe bool TryLoadImGuiTexture(string path, out IntPtr id, out Vector2 size)
+        {
+            id = IntPtr.Zero; size = default;
+            try
+            {
+                var img = Raylib.LoadImage(path);
+                if (img.Data == null) return false;
+
+                var tex = Raylib.LoadTextureFromImage(img);
+                Raylib.UnloadImage(img);
+
+                if (tex.Id == 0) return false;
+
+                // Keep it around (ABI radar map is a singleton for now).
+                // If you need multiple maps, store them in a dictionary.
+                ABIRadarMap = tex;
+                ABIRadarMapSize = new Vector2(tex.Width, tex.Height);
+                ABIRadarMapImGuiId = (IntPtr)tex.Id; // ImGui uses IntPtr as texture id
+
+                id = ABIRadarMapImGuiId;
+                size = ABIRadarMapSize;
+                return true;
+            }
+            catch { return false; }
         }
     }
     public static class SvgLoader

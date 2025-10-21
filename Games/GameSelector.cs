@@ -92,21 +92,14 @@ namespace MamboDMA.Games
             ImGui.Begin("Service · Control", ImGuiWindowFlags.NoCollapse);
 
             // ─────────────────────────────────────────────────────────────
-            // Top status (folded)
-            bool fStatus = BeginFold("svc.status", "Status", defaultOpen: true);
-            if (fStatus)
-            {
-                ImGui.TextColored(new Vector4(0.6f, 0.8f, 1f, 1f), s.Status);
-                ImGui.Separator();
-                ImGui.TextDisabled($"VMM Ready: {VmmInnit} | Attached: {AttachedToProccess} | PID: {s.Pid} | Base: 0x{s.MainBase:X}");
-                EndFold(fStatus);
-            }
-
-            // ─────────────────────────────────────────────────────────────
             // VMM controls (folded)
             bool fVmm = BeginFold("svc.vmm", "VMM Controls", defaultOpen: true);
             if (fVmm)
             {
+                ImGui.TextColored(new Vector4(0.6f, 0.8f, 1f, 1f), s.Status);
+                ImGui.Separator();
+                ImGui.TextDisabled($"VMM Ready: {VmmInnit} | Attached: {AttachedToProccess} | PID: {s.Pid} | Base: 0x{s.MainBase:X}");
+
                 if (ImGui.Button("Init VMM (no attach)")) VmmService.InitOnly();
                 ImGui.SameLine();
                 if (ImGui.Button("Dispose VMM")) VmmService.DisposeVmm();
@@ -118,7 +111,7 @@ namespace MamboDMA.Games
 
             // ─────────────────────────────────────────────────────────────
             // Attach & Processes (folded)
-            bool fProc = BeginFold("svc.proc", "Attach & Processes", defaultOpen: true);
+            bool fProc = BeginFold("svc.proc", "Attach & Processes", defaultOpen: false);
             if (fProc)
             {
                 // Live search
@@ -167,7 +160,7 @@ namespace MamboDMA.Games
 
             // ─────────────────────────────────────────────────────────────
             // Modules (folded)
-            bool fMods = BeginFold("svc.mods", "Modules", defaultOpen: true);
+            bool fMods = BeginFold("svc.mods", "Modules", defaultOpen: false);
             if (fMods)
             {
                 ImGui.SetNextItemWidth(260);

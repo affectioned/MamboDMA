@@ -1,7 +1,6 @@
 using System;
 using System.Numerics;
 using System.Runtime.InteropServices;
-using static MamboDMA.Games.ABI.ABICache;
 
 namespace MamboDMA.Games.ABI
 {
@@ -36,7 +35,7 @@ namespace MamboDMA.Games.ABI
             };
         }
 
-        public static bool WorldToScreen(Vector3 pos, ABICache.FMinimalViewInfo cam, float width, float height, out Vector2 s)
+        public static bool WorldToScreen(Vector3 pos, Players.FMinimalViewInfo cam, float width, float height, out Vector2 s)
         {
             var rot = new Vector3(cam.Rotation.Pitch, cam.Rotation.Yaw, cam.Rotation.Roll);
             Matrix4x4 m = RotationMatrix(rot);
@@ -71,7 +70,7 @@ namespace MamboDMA.Games.ABI
     //©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public struct FQuat { public float X, Y, Z, W; }
-    
+
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public struct FTransform
     {
