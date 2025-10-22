@@ -108,7 +108,7 @@ namespace MamboDMA.Games
                 ImGui.TextDisabled($"VMM Ready: {s.VmmReady} | PID: {s.Pid} | Base: 0x{s.MainBase:X}");
                 EndFold(fVmm);
             }
-
+            
             // ─────────────────────────────────────────────────────────────
             // Attach & Processes (folded)
             bool fProc = BeginFold("svc.proc", "Attach & Processes", defaultOpen: false);
@@ -130,17 +130,15 @@ namespace MamboDMA.Games
 
                 if (_procSelectedIndex >= filtered.Length) _procSelectedIndex = -1;
 
-                if (ImGui.BeginChild("proc_child", new Vector2(0, 150), ImGuiChildFlags.None))
+                ImGui.BeginChild("proc_child", new Vector2(0, 150), ImGuiChildFlags.None);
+                for (int i = 0; i < filtered.Length; i++)
                 {
-                    for (int i = 0; i < filtered.Length; i++)
-                    {
-                        var p = filtered[i];
-                        bool sel = (i == _procSelectedIndex);
-                        if (ImGui.Selectable($"{p.Pid,6}  {p.Name}{(p.IsWow64 ? " (Wow64)" : "")}", sel))
-                            _procSelectedIndex = i;
-                    }
-                    ImGui.EndChild();
+                    var p = filtered[i];
+                    bool sel = (i == _procSelectedIndex);
+                    if (ImGui.Selectable($"{p.Pid,6}  {p.Name}{(p.IsWow64 ? " (Wow64)" : "")}", sel))
+                        _procSelectedIndex = i;
                 }
+                ImGui.EndChild();
 
                 if (_procSelectedIndex >= 0 && _procSelectedIndex < filtered.Length)
                 {
@@ -173,12 +171,10 @@ namespace MamboDMA.Games
                 var mods = s.Modules ?? Array.Empty<DmaMemory.ModuleInfo>();
                 var mFiltered = FilterModules(mods, _modFilter).ToArray();
 
-                if (ImGui.BeginChild("mods_child", new Vector2(0, 150), ImGuiChildFlags.None))
-                {
-                    foreach (var m in mFiltered)
-                        ImGui.TextUnformatted($"{m.Name,-28} Base=0x{m.Base:X} Size=0x{m.Size:X}");
-                    ImGui.EndChild();
-                }
+                ImGui.BeginChild("mods_child", new Vector2(0, 150), ImGuiChildFlags.None);
+                foreach (var m in mFiltered)
+                    ImGui.TextUnformatted($"{m.Name,-28} Base=0x{m.Base:X} Size=0x{m.Size:X}");
+                ImGui.EndChild();
                 EndFold(fMods);
             }
 
