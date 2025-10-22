@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using MamboDMA;
+using MamboDMA.Games;
 using VmmSharpEx.Scatter;
 using static MamboDMA.Misc;
 
@@ -194,10 +195,12 @@ namespace ArmaReforgerFeeder
     {
         // Public state
         public static CameraModel Camera;
-        public static ScreenSettings Screen = new(1920, 1080);
+        public static ScreenSettings Screen = new(ScreenService.Current.W, ScreenService.Current.H);
         public static void Reset()
         {
             ResetCamera();
+            if (ScreenService.Current.W <= 0 || ScreenService.Current.H <= 0)
+                ScreenService.UpdateFromMonitor(GameSelector.SelectedMonitor);            
             _gamePtr = _camMgrWeak = _camMgr = _playerCamWeak = _playerCam = 0;
         }
         /// <summary>

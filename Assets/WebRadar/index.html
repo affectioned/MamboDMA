@@ -22,12 +22,25 @@
 
   <div class="controls">
     <label>Zoom <input id="zoom" type="range" min="0.25" max="4" step="0.05" value="0.5"/></label>
-    <label>cm/px <input id="cmpp" type="number" step="1" value="100"/></label>
-    <label>OriginX <input id="cx" type="number" step="1" value="0"/></label>
-    <label>OriginY <input id="cy" type="number" step="1" value="0"/></label>
-    <label><input id="swapxy" type="checkbox"> Swap XY</label>
-    <label><input id="flipx"  type="checkbox"> Flip X</label>
-    <label><input id="flipy"  type="checkbox"> Flip Y</label>
+
+    <!-- Input scaling & offset (pre-map) -->
+    <label title="Divide incoming X/Y by this before mapping">
+      Input scale
+      <input id="inScale" type="number" step="1" min="1" value="100"/>
+    </label>
+    <label title="Add to incoming X (after scaling) in map-pixel units">
+      InOffsetX
+      <input id="inOffX" type="number" step="1" value="0"/>
+    </label>
+    <label title="Add to incoming Y (after scaling) in map-pixel units">
+      InOffsetY
+      <input id="inOffY" type="number" step="1" value="0"/>
+    </label>
+
+    <label title="When enabled, first 'self' seen after Connect becomes the session origin (old spawns won't carry over)">
+      <input id="sessionAnchor" type="checkbox" checked>
+      Anchor to first self (per session)
+    </label>
   </div>
 </div>
 
@@ -38,7 +51,7 @@
     <label><input id="fPMCs" type="checkbox" checked> PMCs</label>
     <label><input id="fBots" type="checkbox" checked> Bots</label>
     <label><input id="fDead" type="checkbox" checked> Dead</label>
-    <label title="Only draw actors within this range of your position">
+    <label title="(Disabled when units=mappx)">
       Max Range (m)
       <input id="maxRange" type="number" min="0" step="10" value="2000">
     </label>
@@ -47,8 +60,8 @@
   <div class="panel">
     <strong>Icon Sizes</strong>
     <label>Self <input id="szSelf" type="number" min="2" max="30" step="1" value="7"></label>
-    <label>PMC <input id="szPMC"  type="number" min="2" max="30" step="1" value="5"></label>
-    <label>Bot <input id="szBot"  type="number" min="2" max="30" step="1" value="4"></label>
+    <label>PMC  <input id="szPMC"  type="number" min="2" max="30" step="1" value="5"></label>
+    <label>Bot  <input id="szBot"  type="number" min="2" max="30" step="1" value="4"></label>
     <label>Dead <input id="szDead" type="number" min="2" max="30" step="1" value="6"></label>
   </div>
 

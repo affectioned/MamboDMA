@@ -34,13 +34,10 @@ body {
 }
 .panel { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .panel strong { margin-right: 6px; color:#bbb; }
-.panel input[type="number"] { width: 84px; background:#111; border:1px solid #2a2a2a; color:#ddd; border-radius:6px; padding:4px 6px; }
+.panel input[type="number"] { width: 86px; background:#111; border:1px solid #2a2a2a; color:#ddd; border-radius:6px; padding:4px 6px; }
 .panel input[type="color"] { width: 38px; height: 28px; border:1px solid #2a2a2a; background:#111; border-radius:6px; padding:0; }
 
-#wrap {
-  /* this row auto-fills the rest of the viewport via grid 1fr */
-  min-height: 0; /* important so child can grow */
-}
+#wrap { min-height: 0; }
 #radar {
   width: 100%;
   height: 100%;
