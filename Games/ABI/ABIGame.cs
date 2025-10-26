@@ -44,7 +44,6 @@ namespace MamboDMA.Games.ABI
         private static Vector4 _deadOutline = new(1f, 0.84f, 0f, 1f);
 
         private const string _abiExe = "UAGame.exe";
-
         public void Initialize()
         {
             if (_initialized) return;
@@ -75,7 +74,7 @@ namespace MamboDMA.Games.ABI
         {
             if (!_running) return;
             _running = false;
-        
+
             Players.Stop();
             TimerResolution.Disable1ms();
             MamboDMA.Games.ABI.WebRadarUI.StopIfRunning(); // ensure server is down
@@ -251,7 +250,7 @@ namespace MamboDMA.Games.ABI
                 {
                     var a = actors[i];
                     posMap.TryGetValue(a.Pawn, out var ap);
-
+                    if (ABIESP.IsBogusPos(ap.Position)) continue;
                     string type = a.IsBot ? "BOT" : "PMC";
                     string hp = (ap.HealthMax > 1f) ? $"{ap.Health:F0}/{ap.HealthMax:F0}" : "-";
                     bool hasSkel = ap.HasFreshSkeleton;
@@ -333,7 +332,7 @@ namespace MamboDMA.Games.ABI
             for (int i = 0; i < actors.Count; i++)
             {
                 if (!posMap.TryGetValue(actors[i].Pawn, out var ap)) continue;
-
+                if (IsBogusPos(ap.Position)) continue;
                 float distCm = Vector3.Distance(local, ap.Position);
                 float distM  = distCm / 100f;
                 if (distM > maxDistMeters) continue;
@@ -427,7 +426,13 @@ namespace MamboDMA.Games.ABI
             list.AddLine(p2, p3, outline, t);
             list.AddLine(p3, p0, outline, t);
         }
-
+        public static bool IsBogusPos(in Vector3 p)
+        {
+            // Treat (0,0,-90) as the sentinel. Use small eps so tiny float jitter doesn't leak through.
+            const float ex = 0.5f;    // X/Y tolerance
+            const float ez = 1.0f;    // Z tolerance
+            return MathF.Abs(p.X) <= ex && MathF.Abs(p.Y) <= ex && MathF.Abs(p.Z + 90f) <= ez;
+        }
         private static void DrawHealthBar(ImDrawListPtr list, Vector2 topLeft, float width, float health, float maxHealth)
         {
             float h = 5f;

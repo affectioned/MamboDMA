@@ -168,16 +168,25 @@ namespace MamboDMA.Games.ABI
                             ? ABIOffsets.APlayerCameraManager_LastFrameCameraCachePrivate
                             : ABIOffsets.APlayerCameraManager_CameraCachePrivate;
 
+                        // A) Camera (unchanged)
                         r[0].AddValueEntry<FMinimalViewInfo>(0, LocalCameraMgr + camCache + 0x10);
-                        r[0].AddValueEntry<Vector3>(1, LocalRoot + ABIOffsets.USceneComponent_RelativeLocation);
+
+                        // B) Local root ¡ú ComponentToWorld
+                        r[0].AddValueEntry<ulong>(1, LocalRoot + ABIOffsets.USceneComponent_ComponentToWorld_Ptr);
+
                         map.Execute();
 
                         if (r[0].TryGetValue(0, out FMinimalViewInfo cam) &&
-                            r[0].TryGetValue(1, out Vector3 local))
+                            r[0].TryGetValue(1, out ulong ctwPtr) && ctwPtr != 0)
                         {
+                            // read CTW struct
+                            var ctw = DmaMemory.Read<FTransform>(ctwPtr);
+
                             Interlocked.Increment(ref _camSeq);
-                            _camBuf = cam; _camLocalBuf = local;
-                            Camera = cam; LocalPosition = local;
+                            _camBuf = cam;
+                            _camLocalBuf = ctw.Translation;   // <-- WORLD translation
+                            Camera = cam;
+                            LocalPosition = ctw.Translation;  // <-- publish WORLD position
                             Interlocked.Increment(ref _camSeq);
                         }
                     }
