@@ -1,83 +1,99 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>MamboDMA Web Radar</title>
-<link rel="stylesheet" href="radar.css"/>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>MamboDMA Web Radar</title>
+  <link rel="stylesheet" href="radar.css"/>
 </head>
 <body>
-<div id="topbar">
-  <div class="left">
-    <select id="mapSel" title="Map">
-      <option value="Farm">Farm</option>
-      <option value="Valley">Valley</option>
-    </select>
+  <div id="app">
+    <header id="toolbar" class="expanded">
+      <div id="toolbar-top">
+        <button id="collapseBtn" title="Toggle toolbar" aria-label="Toggle toolbar">?</button>
+        <nav class="tabs">
+          <button class="tab active" data-tab="general">General Settings</button>
+          <button class="tab" data-tab="players">Player Settings</button>
+        </nav>
+        <span id="status">disconnected</span>
+      </div>
 
-    <input id="serverUrl" type="text" placeholder="http://localhost:8088">
-    <button id="btnConnect">Connect</button>
-    <button id="btnCopy">Copy Mapping</button>
-    <span id="status">disconnected</span>
+      <!-- General Settings -->
+      <section class="tabpage active" id="tab-general" role="tabpanel" aria-label="General Settings">
+        <div class="row">
+          <label class="inline">
+            Map
+            <select id="mapSel" title="Map"></select>
+          </label>
+          <button id="btnRescan" title="Rescan /api/maps">Rescan Maps</button>
+
+          <label class="inline grow" title="Radar server base URL">
+            Server URL
+            <input id="serverUrl" type="text" placeholder="http://localhost:8088" />
+          </label>
+          <button id="btnConnect">Connect</button>
+
+          <button id="btnSaveMap" title="Save to current map's JSON">Save Map Setup</button>
+        </div>
+
+        <div class="row">
+          <label class="inline">
+            Zoom
+            <input id="zoom" type="range" min="0.25" max="10" step="0.05" value="0.5"/>
+          </label>
+
+          <label class="inline" title="Divide incoming cm by this to get image px (supports decimals)">
+            Scale (cm/imgpx)
+            <input id="inScale" type="number" step="0.001" min="0.001" value="33.120"/>
+          </label>
+
+          <label class="inline" title="Flip Y if your world +Y points opposite to image +Y">
+            <input id="yFlip" type="checkbox"> Y-flip
+          </label>
+
+          <label class="inline" title="Add this world X offset (cm) before scaling; e.g. 4000">
+            World Offset X (cm)
+            <input id="offX" type="number" step="1" value="0"/>
+          </label>
+          <label class="inline" title="Add this world Y offset (cm) before scaling; e.g. 1000">
+            World Offset Y (cm)
+            <input id="offY" type="number" step="1" value="0"/>
+          </label>
+        </div>
+      </section>
+
+      <!-- Player Settings -->
+      <section class="tabpage" id="tab-players" role="tabpanel" aria-label="Player Settings">
+        <div class="row">
+          <label class="inline"><input id="fSelf" type="checkbox" checked> Show Self</label>
+          <label class="inline"><input id="fPMCs" type="checkbox" checked> Show PMCs</label>
+          <label class="inline"><input id="fBots" type="checkbox" checked> Show Bots</label>
+          <label class="inline"><input id="fDead" type="checkbox" checked> Show Dead</label>
+          <label class="inline" title="Max draw distance (meters)">
+            Max Range (m)
+            <input id="maxRange" type="number" min="0" step="10" value="2000">
+          </label>
+        </div>
+
+        <div class="row">
+          <label class="inline">Self Size <input id="szSelf" type="number" min="2" max="30" step="1" value="8"></label>
+          <label class="inline">PMC Size  <input id="szPMC"  type="number" min="2" max="30" step="1" value="6"></label>
+          <label class="inline">Bot Size  <input id="szBot"  type="number" min="2" max="30" step="1" value="5"></label>
+          <label class="inline">Dead Size <input id="szDead" type="number" min="2" max="30" step="1" value="6"></label>
+
+          <label class="inline">Self Color <input id="colSelf" type="color" value="#19ff6a"></label>
+          <label class="inline">PMC Color  <input id="colPMC"  type="color" value="#ff4a4a"></label>
+          <label class="inline">Bot Color  <input id="colBot"  type="color" value="#0db1ff"></label>
+          <label class="inline">Dead Color <input id="colDead" type="color" value="#ffd600"></label>
+        </div>
+      </section>
+    </header>
+
+    <main id="wrap">
+      <canvas id="radar"></canvas>
+    </main>
   </div>
 
-  <div class="controls">
-    <label>Zoom <input id="zoom" type="range" min="0.25" max="4" step="0.05" value="0.5"/></label>
-
-    <!-- Input scaling & offset (pre-map) -->
-    <label title="Divide incoming X/Y by this before mapping">
-      Input scale
-      <input id="inScale" type="number" step="1" min="1" value="100"/>
-    </label>
-    <label title="Add to incoming X (after scaling) in map-pixel units">
-      InOffsetX
-      <input id="inOffX" type="number" step="1" value="0"/>
-    </label>
-    <label title="Add to incoming Y (after scaling) in map-pixel units">
-      InOffsetY
-      <input id="inOffY" type="number" step="1" value="0"/>
-    </label>
-
-    <label title="When enabled, first 'self' seen after Connect becomes the session origin (press R to re-anchor).">
-      <input id="sessionAnchor" type="checkbox" checked>
-      Anchor to first self (per session)
-    </label>
-  </div>
-</div>
-
-<div id="panelbar">
-  <div class="panel">
-    <strong>Filters</strong>
-    <label><input id="fSelf" type="checkbox" checked> Self</label>
-    <label><input id="fPMCs" type="checkbox" checked> PMCs</label>
-    <label><input id="fBots" type="checkbox" checked> Bots</label>
-    <label><input id="fDead" type="checkbox" checked> Dead</label>
-    <label title="(Disabled when units=mappx)">
-      Max Range (m)
-      <input id="maxRange" type="number" min="0" step="10" value="2000">
-    </label>
-  </div>
-
-  <div class="panel">
-    <strong>Icon Sizes</strong>
-    <label>Self <input id="szSelf" type="number" min="2" max="30" step="1" value="7"></label>
-    <label>PMC  <input id="szPMC"  type="number" min="2" max="30" step="1" value="5"></label>
-    <label>Bot  <input id="szBot"  type="number" min="2" max="30" step="1" value="4"></label>
-    <label>Dead <input id="szDead" type="number" min="2" max="30" step="1" value="6"></label>
-  </div>
-
-  <div class="panel">
-    <strong>Colors</strong>
-    <label>Self <input id="colSelf" type="color" value="#19ff6a"></label>
-    <label>PMC  <input id="colPMC"  type="color" value="#ff4a4a"></label>
-    <label>Bot  <input id="colBot"  type="color" value="#0db1ff"></label>
-    <label>Dead <input id="colDead" type="color" value="#ffd600"></label>
-  </div>
-</div>
-
-<div id="wrap">
-  <canvas id="radar"></canvas>
-</div>
-
-<script src="radar.js"></script>
+  <script src="radar.js"></script>
 </body>
 </html>

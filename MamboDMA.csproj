@@ -37,6 +37,7 @@
 	  <None Include="Assets\WebRadar\**\*.html" CopyToOutputDirectory="PreserveNewest" />
 	  <None Include="Assets\WebRadar\**\*.png" CopyToOutputDirectory="PreserveNewest" />
 	  <None Include="Assets\WebRadar\**\*.js" CopyToOutputDirectory="PreserveNewest" />
+	  <None Include="Assets\WebRadar\**\*.json" CopyToOutputDirectory="PreserveNewest" />
 	  <None Include="Assets\Img\**\*.svg" CopyToOutputDirectory="PreserveNewest" />
 	  <None Include="Assets\Img\**\*.ico" CopyToOutputDirectory="PreserveNewest" />
 	</ItemGroup>

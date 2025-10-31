@@ -188,10 +188,65 @@ namespace MamboDMA.Games.ABI
                 if (path.Equals("/api/frame", StringComparison.OrdinalIgnoreCase)) { HandleApiFrame(ctx); continue; }
                 if (path.Equals("/ping", StringComparison.OrdinalIgnoreCase)) { HandlePing(ctx); continue; }
                 if (path.Equals("/status", StringComparison.OrdinalIgnoreCase)) { HandleStatus(ctx); continue; }
+                if (path.Equals("/api/maps", StringComparison.OrdinalIgnoreCase)) { HandleApiMaps(ctx); continue; }
                 HandleStatic(ctx);
             }
         }
+        private void HandleApiMaps(HttpListenerContext ctx)
+        {
+            try
+            {
+                string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "WebRadar");
+                var list = new List<object>();
 
+                static void AddFromDir(string dir, string urlPrefix, List<object> outList)
+                {
+                    if (!Directory.Exists(dir)) return;
+                    foreach (var path in Directory.EnumerateFiles(dir, "*.*", SearchOption.TopDirectoryOnly))
+                    {
+                        var ext = Path.GetExtension(path)?.ToLowerInvariant();
+                        if (ext is not (".png" or ".jpg" or ".jpeg")) continue;
+
+                        var name = Path.GetFileNameWithoutExtension(path);
+                        var file = Path.GetFileName(path);
+                        var url = $"{urlPrefix}{file}";
+                        outList.Add(new { name, file, url });
+                    }
+                }
+
+                // 1) main folder
+                AddFromDir(root, "/", list);
+
+                // 2) fallback: /Maps subfolder
+                if (list.Count == 0)
+                {
+                    var mapsDir = Path.Combine(root, "Maps");
+                    AddFromDir(mapsDir, "/Maps/", list);
+                }
+
+                // sort by name for stable UI
+                list.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(
+                    (string)a.GetType().GetProperty("name")!.GetValue(a)!,
+                    (string)b.GetType().GetProperty("name")!.GetValue(b)!
+                ));
+
+                var json = System.Text.Json.JsonSerializer.Serialize(list);
+                var buf = Encoding.UTF8.GetBytes(json);
+                ctx.Response.ContentType = "application/json; charset=utf-8";
+                ctx.Response.ContentLength64 = buf.Length;
+                ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*");
+                ctx.Response.OutputStream.Write(buf, 0, buf.Length);
+            }
+            catch
+            {
+                var buf = Encoding.UTF8.GetBytes("[]");
+                ctx.Response.ContentType = "application/json; charset=utf-8";
+                ctx.Response.ContentLength64 = buf.Length;
+                ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*");
+                try { ctx.Response.OutputStream.Write(buf, 0, buf.Length); } catch { }
+            }
+            finally { SafeClose(ctx); }
+        }
         private void HandlePing(HttpListenerContext ctx)
         {
             try
@@ -326,8 +381,9 @@ namespace MamboDMA.Games.ABI
             if (!Players.TryGetFrame(out var fr) || fr.Positions == null)
                 return "{\"ok\":false}";
 
-            float yawDeg = fr.Cam.Rotation.Yaw;
-            ulong sessionId = Players.PersistentLevel;  // new raid ¡ú new id
+            // Use stable control-rotation yaw (won't snap on map open)
+            float yawDeg = Players.CtrlYaw;
+            ulong sessionId = Players.PersistentLevel;
             float camFov = fr.Cam.Fov;
 
             List<Players.ABIPlayer> actors;
@@ -335,23 +391,21 @@ namespace MamboDMA.Games.ABI
                 actors = Players.ActorList.Count > 0 ? new List<Players.ABIPlayer>(Players.ActorList) : new();
 
             var inv = System.Globalization.CultureInfo.InvariantCulture;
-            var sb = new StringBuilder(1 << 14);
+            var sb = new System.Text.StringBuilder(1 << 14);
 
             sb.Append("{\"ok\":true");
             sb.Append(",\"session\":"); sb.Append(sessionId.ToString());
             sb.Append(",\"fov\":"); sb.Append(camFov.ToString("0.###", inv));
 
-            // self (now with Z)
+            // self (with Z + CtrlYaw)
             sb.Append(",\"self\":{");
             sb.AppendFormat(inv, "\"x\":{0:0.###},\"y\":{1:0.###},\"z\":{2:0.###},\"yaw\":{3:0.###}",
                 fr.Local.X, fr.Local.Y, fr.Local.Z, yawDeg);
             sb.Append('}');
 
-            // quick lookup: Pawn -> ActorPos
             var posMap = new Dictionary<ulong, Players.ActorPos>(fr.Positions.Count);
             for (int i = 0; i < fr.Positions.Count; i++) posMap[fr.Positions[i].Pawn] = fr.Positions[i];
 
-            // actors (add z and pawn as hex string)
             sb.Append(",\"actors\":[");
             bool first = true;
             for (int i = 0; i < actors.Count; i++)
@@ -366,15 +420,11 @@ namespace MamboDMA.Games.ABI
                 sb.AppendFormat(inv, "\"x\":{0:0.###},\"y\":{1:0.###},\"z\":{2:0.###}", ap.Position.X, ap.Position.Y, ap.Position.Z);
                 sb.Append(",\"dead\":"); sb.Append(ap.IsDead ? "true" : "false");
                 sb.Append(",\"bot\":"); sb.Append(a.IsBot ? "true" : "false");
-
-                // IMPORTANT: pawn as string to avoid JS precision loss
                 sb.Append(",\"pawn\":\"0x"); sb.Append(a.Pawn.ToString("X")); sb.Append('\"');
-
                 sb.Append('}');
             }
             sb.Append(']');
 
-            // optional public IP/export
             if (!string.IsNullOrEmpty(ExternalIp))
             {
                 sb.Append(",\"publicIp\":\""); sb.Append(ExternalIp); sb.Append('\"');
