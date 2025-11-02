@@ -1,4 +1,5 @@
 ﻿using MamboDMA.Games.ABI;
+using MamboDMA.Services;
 using System.Numerics;
 using static MamboDMA.Games.ABI.Players;
 
@@ -6,8 +7,9 @@ namespace MamboDMA.Games.CS2
 {
     public static class Players
     {
-        public static ulong clientBase, entityListPtr, controllerEntry, playerController, pawnEntry, playerPawn;
-        public static uint entityPawn, entityHealth;
+        public static ulong clientBase;
+        public static ulong entityListPtr, listEntry, currentController, pawnHandle, listEntry2, currentPawn;
+        
         public struct CS2Player
         {
             public int Index;
@@ -65,41 +67,53 @@ namespace MamboDMA.Games.CS2
         {
             if (entityListPtr == 0) return;
 
-            ulong controllerEntry = DmaMemory.Read<ulong>(entityListPtr + 0x10);
-            if (controllerEntry == 0) return;
+            // first entry to the entity list
+            listEntry = DmaMemory.Read<ulong>(entityListPtr + 0x10);
+            if (listEntry == 0) return;
 
-            lock (CachedPlayers)
+            for (int i = 0; i < 64; i++)
             {
-                CachedPlayers.Clear();
+                // get current controller
+                currentController = DmaMemory.Read<ulong>(listEntry + (ulong)(i * 0x78));
+                if (currentController == 0) continue;
 
-                for (int i = 1; i <= 64; i++)
-                {
-                    ulong playerController = DmaMemory.Read<ulong>(controllerEntry + (ulong)(120 * i));
-                    if (playerController == 0) continue;
+                // get pawn handle
+                pawnHandle = DmaMemory.Read<ulong>(currentController + CS2Offsets.m_hPlayerPawn);
+                if (pawnHandle == 0) continue;
 
-                    uint pawn = DmaMemory.Read<uint>(playerController + CS2Offsets.m_hPawn);
-                    if ((pawn & 0x7FFFu) == 0) continue;
+                // second entry, now we find the pawn
+                // Find which part ("chunk") of the entity list our pawn is stored in.
+                // Every chunk holds 512 entities, and each chunk address is 8 bytes apart.
+                //
+                // (pawnHandle & 0x7FFF) -> gets the entity number from the handle
+                // >> 9 -> divides that number by 512 to find which chunk it’s in
+                // * 0x8 -> moves 8 bytes per chunk (because each address is 8 bytes)
+                // + 0x10 -> skips a small header at the start of the list
+                //
+                // The result is the memory address of that chunk.
+                listEntry2 = DmaMemory.Read<ulong>(entityListPtr + 0x8 * ((pawnHandle & 0x7FFF) >> 9) + 0x10);
+                if (listEntry2 == 0) continue;
 
-                    ulong pawnEntry = DmaMemory.Read<ulong>(
-                        entityListPtr + 0x8UL * (ulong)((pawn & 0x7FFFu) >> 9) + 0x10UL);
+                // Get the actual pawn pointer inside the chunk we found earlier.
+                // Each chunk holds up to 512 entities, and each entity entry is 0x78 bytes apart.
+                //
+                // (pawnHandle & 0x1FF) -> gets the position of our entity inside the chunk (like index % 512)
+                // * 0x78 -> moves forward by 0x78 bytes for each entity slot
+                //
+                // The result is the memory address of the specific pawn.
+                currentPawn = DmaMemory.Read<ulong>(listEntry2 + 0x78 * (pawnHandle & 0x1FF));
+                if (currentPawn == 0) continue;
 
-                    ulong playerPawn = DmaMemory.Read<ulong>(pawnEntry + (ulong)(120 * (pawn & 0x1FFu)));
-                    if (playerPawn == 0) continue;
+                // get pawn attributes
+                int pawnHealth = DmaMemory.Read<int>(currentPawn + CS2Offsets.m_iHealth);
 
-                    uint health = DmaMemory.Read<uint>(playerPawn + CS2Offsets.m_iHealth);
-                    Vector3 position = DmaMemory.Read<Vector3>(playerPawn + CS2Offsets.m_vOldOrigin);
+                // get controller attributes
+                char controllerPlayerName = DmaMemory.Read<char>(currentController + CS2Offsets.m_iszPlayerName);
 
-                    CachedPlayers.Add(new CS2Player
-                    {
-                        Index = i,
-                        Controller = playerController,
-                        Pawn = playerPawn,
-                        Health = health,
-                        Position = position
-                    });
-                }
+                Logger.Info($"[CS2] Player: {controllerPlayerName}, Health: {pawnHealth}");
             }
         }
+
 
         private static void HighResDelay(int targetMs)
         {

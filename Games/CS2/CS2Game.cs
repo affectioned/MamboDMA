@@ -79,8 +79,12 @@ namespace MamboDMA.Games.CS2
                 ImGui.Text("©¤ Debug Info ©¤");
                 ImGui.Text($"clientBase: 0x{Players.clientBase:X}");
                 ImGui.Text($"entityListPtr: 0x{Players.entityListPtr:X}");
+                ImGui.Text($"listEntry: 0x{Players.listEntry}");
+                ImGui.Text("©¤ 64 controllers ©¤");
+                ImGui.Text($"currentController: 0x{Players.currentController}");
+                ImGui.Text($"pawnHandle: 0x{Players.pawnHandle}");
 
-                DrawPlayersDebugWindow();
+                //DrawPlayersDebugWindow();
             }
 
             ImGui.SameLine();
