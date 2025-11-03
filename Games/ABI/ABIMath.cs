@@ -1,3 +1,4 @@
+// MamboDMA/Games/ABI/ABIMath.cs
 using System;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -45,9 +46,9 @@ namespace MamboDMA.Games.ABI
 
             return new Matrix4x4
             {
-                M11 = CP * CY,             M12 = CP * SY,             M13 = SP,
+                M11 = CP * CY,              M12 = CP * SY,              M13 = SP,
                 M21 = SR * SP * CY - CR*SY, M22 = SR * SP * SY + CR*CY, M23 = -SR * CP,
-                M31 = -(CR*SP*CY + SR*SY), M32 = CY * SR - CR*SP*SY,   M33 = CR * CP
+                M31 = -(CR*SP*CY + SR*SY),  M32 = CY * SR - CR*SP*SY,   M33 = CR * CP
             };
         }
 

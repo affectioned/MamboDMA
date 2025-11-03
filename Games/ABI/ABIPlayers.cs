@@ -1,10 +1,8 @@
+// MamboDMA/Games/ABI/Players.cs
 using System;
 using System.Collections.Generic;
 using System.Numerics;
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Threading;
-using ImGuiNET;
 using MamboDMA.Services;
 using VmmSharpEx.Scatter.V2;
 
@@ -77,7 +75,23 @@ namespace MamboDMA.Games.ABI
 
         private static bool _running;
 
-        private static Dictionary<ulong, (float h, float hm)> _pendingVitals;
+        // stable cache (sticky)
+        private struct ActorCacheEntry
+        {
+            public ulong Pawn;
+            public ulong Mesh;
+            public ulong Root;
+            public ulong ASC;
+            public ulong DeathComp;
+            public ulong HealthSet;
+            public bool  IsBot;
+            public string Name;
+        }
+        private static readonly Dictionary<ulong, ActorCacheEntry> _actorCache = new(1024);
+
+        // throttles
+        private static long _lastEnumTicks;
+        private const int ENUM_PERIOD_MS = 150;
 
         // API
         public static void StartCache()
@@ -88,9 +102,10 @@ namespace MamboDMA.Games.ABI
             new Thread(CacheWorldLoop)     { IsBackground = true, Priority = ThreadPriority.AboveNormal, Name = "ABI.World"     }.Start();
             new Thread(CacheCameraLoop)    { IsBackground = true, Priority = ThreadPriority.Highest,     Name = "ABI.Camera"    }.Start();
             new Thread(CachePlayersLoop)   { IsBackground = true, Priority = ThreadPriority.AboveNormal, Name = "ABI.Players"   }.Start();
-            new Thread(CacheVitalsLoop)    { IsBackground = true, Priority = ThreadPriority.Highest,     Name = "ABI.Vitals"    }.Start();
+            new Thread(CacheVitalsLoop)    { IsBackground = true, Priority = ThreadPriority.AboveNormal, Name = "ABI.Vitals"    }.Start();
             new Thread(CachePositionsLoop) { IsBackground = true, Priority = ThreadPriority.Highest,     Name = "ABI.Positions" }.Start();
-            new Thread(CacheSkeletonsLoop) { IsBackground = true, Priority = ThreadPriority.Highest,     Name = "ABI.Skeletons" }.Start();
+            new Thread(CacheSkeletonsLoop) { IsBackground = true, Priority = ThreadPriority.AboveNormal, Name = "ABI.Skeletons" }.Start();
+            new Thread(FramePulseLoop)     { IsBackground = true, Priority = ThreadPriority.Highest,     Name = "ABI.FramePulse"}.Start();
         }
 
         public static void Stop() => _running = false;
@@ -141,7 +156,6 @@ namespace MamboDMA.Games.ABI
             GameState       = DmaMemory.Read<ulong>(UWorld + ABIOffsets.UWorld_GameState);
             PersistentLevel = DmaMemory.Read<ulong>(UWorld + ABIOffsets.UWorld_PersistentLevel);
 
-            // (ULevel.Actors TArray is: Data at +0, Num at +8)
             ActorArray      = DmaMemory.Read<ulong>(PersistentLevel + ABIOffsets.ULevel_ActorArray + 0x00);
             ActorCount      = DmaMemory.Read<int>  (PersistentLevel + ABIOffsets.ULevel_ActorArray + 0x08);
 
@@ -186,7 +200,7 @@ namespace MamboDMA.Games.ABI
                         if (r[0].TryGetValue(0, out FMinimalViewInfo cam) &&
                             r[0].TryGetValue(1, out Vector3 localWorld))
                         {
-                            // world-origin jump guard (kept for safety)
+                            // origin jump guard
                             if (_havePrevLocal)
                             {
                                 var jump = _prevLocalWorld - localWorld;
@@ -213,111 +227,145 @@ namespace MamboDMA.Games.ABI
                     }
                 }
                 catch { }
-                HighResDelay(1);
+                HighResDelay(1); // micro-loop keeps camera fresh
             }
         }
 
         private static void CachePlayersLoop()
         {
-            while (_running) { try { CachePlayersScatter(); } catch { } HighResDelay(45); }
-        }
-
-        private static void CachePlayersScatter()
-        {
-            if (ActorArray == 0 || ActorCount <= 0) return;
-
-            var tmp = new List<ABIPlayer>(Math.Min(ActorCount, 2048));
-
-            using var map = DmaMemory.Scatter();
-            var round = map.AddRound(false);
-            int take = Math.Min(ActorCount, 2048);
-            for (int i = 0; i < take; i++)
-                round[i].AddValueEntry<ulong>(0, ActorArray + (ulong)i * 8);
-            map.Execute();
-
-            for (int i = 0; i < take; i++)
+            while (_running)
             {
-                if (!round[i].TryGetValue(0, out ulong pawn) || pawn == 0 || pawn == LocalPawn) continue;
+                try
+                {
+                    var now = System.Diagnostics.Stopwatch.GetTimestamp();
+                    double ms   = now * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                    double last = _lastEnumTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                    if (ms - last < ENUM_PERIOD_MS) { HighResDelay(10); continue; }
+                    _lastEnumTicks = now;
 
-                uint id = DmaMemory.Read<uint>(pawn + 24);
-                string name = ABINamePool.GetName(id);
-                if (string.IsNullOrEmpty(name)) continue;
+                    if (ActorArray == 0 || ActorCount <= 0) { lock (Sync) ActorList = new(); continue; }
 
-                if (!name.Contains("BP_UamCharacter") &&
-                    !name.Contains("BP_UamAICharacter") &&
-                    !name.Contains("BP_UamRangeCharacter_C"))
-                    continue;
+                    var tmp = new List<ABIPlayer>(Math.Min(ActorCount, 2048));
 
-                tmp.Add(new ABIPlayer(pawn, 0, 0, name, name.Contains("AI"), 0, 0, 0));
+                    using (var map = DmaMemory.Scatter())
+                    {
+                        var round = map.AddRound(false);
+                        int take = Math.Min(ActorCount, 2048);
+                        for (int i = 0; i < take; i++)
+                            round[i].AddValueEntry<ulong>(0, ActorArray + (ulong)i * 8);
+                        map.Execute();
+
+                        for (int i = 0; i < take; i++)
+                        {
+                            if (!round[i].TryGetValue(0, out ulong pawn) || pawn == 0 || pawn == LocalPawn) continue;
+
+                            uint id = DmaMemory.Read<uint>(pawn + 24);
+                            string name = ABINamePool.GetName(id);
+                            if (string.IsNullOrEmpty(name)) continue;
+
+                            if (!name.Contains("BP_UamCharacter") &&
+                                !name.Contains("BP_UamAICharacter") &&
+                                !name.Contains("BP_UamRangeCharacter_C"))
+                                continue;
+
+                            bool isBot = name.Contains("AI");
+                            tmp.Add(new ABIPlayer(pawn, 0, 0, name, isBot, 0, 0, 0));
+                        }
+                    }
+
+                    // resolve sticky ptrs (Mesh/Root/ASC/DeathComp) for those missing
+                    if (tmp.Count > 0)
+                    {
+                        using var map2 = DmaMemory.Scatter();
+                        var r2 = map2.AddRound(false);
+                        int idx = 0;
+                        var idxMap = new List<int>(tmp.Count);
+
+                        for (int i = 0; i < tmp.Count; i++)
+                        {
+                            var t = tmp[i];
+                            _actorCache.TryGetValue(t.Pawn, out var ac);
+
+                            bool need = false;
+                            if (ac.Mesh == 0)      { r2[idx].AddValueEntry<ulong>(0, t.Pawn + ABIOffsets.ACharacter_Mesh); need = true; }
+                            if (ac.Root == 0)      { r2[idx].AddValueEntry<ulong>(1, t.Pawn + ABIOffsets.AActor_RootComponent); need = true; }
+                            if (ac.ASC == 0)       { r2[idx].AddValueEntry<ulong>(2, t.Pawn + (ulong)ABIOffsetsExt.OFF_PAWN_ASC); need = true; }
+                            if (ac.DeathComp == 0) { r2[idx].AddValueEntry<ulong>(3, t.Pawn + (ulong)ABIOffsetsExt.OFF_PAWN_DEATHCOMP); need = true; }
+                            if (need) { idxMap.Add(i); idx++; }
+                        }
+
+                        if (idx > 0)
+                        {
+                            map2.Execute();
+                            for (int k = 0; k < idxMap.Count; k++)
+                            {
+                                int i = idxMap[k];
+                                var t = tmp[i];
+                                _actorCache.TryGetValue(t.Pawn, out var ac);
+
+                                if (r2[k].TryGetValue(0, out ulong mesh) && mesh != 0)      ac.Mesh = mesh;
+                                if (r2[k].TryGetValue(1, out ulong root) && root != 0)      ac.Root = root;
+                                if (r2[k].TryGetValue(2, out ulong asc)  && asc  != 0)      ac.ASC  = asc;
+                                if (r2[k].TryGetValue(3, out ulong dc)   && dc   != 0)      ac.DeathComp = dc;
+
+                                ac.IsBot = t.IsBot; ac.Name = t.Name;
+                                _actorCache[t.Pawn] = ac;
+                            }
+                        }
+
+                        // write back sticky values into list
+                        for (int i = 0; i < tmp.Count; i++)
+                        {
+                            var t = tmp[i];
+                            if (_actorCache.TryGetValue(t.Pawn, out var ac))
+                                tmp[i] = new ABIPlayer(t.Pawn, ac.Mesh, ac.Root, t.Name, ac.IsBot, ac.ASC, ac.HealthSet, ac.DeathComp);
+                        }
+                    }
+
+                    lock (Sync) ActorList = tmp;
+                }
+                catch { }
             }
-
-            if (tmp.Count == 0) { lock (Sync) ActorList = tmp; return; }
-
-            using var map2 = DmaMemory.Scatter();
-            var r2 = map2.AddRound(false);
-            for (int i = 0; i < tmp.Count; i++)
-            {
-                r2[i].AddValueEntry<ulong>(0, tmp[i].Pawn + ABIOffsets.ACharacter_Mesh);
-                r2[i].AddValueEntry<ulong>(1, tmp[i].Pawn + ABIOffsets.AActor_RootComponent);
-                r2[i].AddValueEntry<ulong>(2, tmp[i].Pawn + (ulong)ABIOffsetsExt.OFF_PAWN_ASC);
-                r2[i].AddValueEntry<ulong>(3, tmp[i].Pawn + (ulong)ABIOffsetsExt.OFF_PAWN_DEATHCOMP);
-            }
-            map2.Execute();
-
-            for (int i = 0; i < tmp.Count; i++)
-            {
-                if (r2[i].TryGetValue(0, out ulong mesh)) tmp[i] = tmp[i] with { Mesh = mesh };
-                if (r2[i].TryGetValue(1, out ulong root)) tmp[i] = tmp[i] with { Root = root };
-                if (r2[i].TryGetValue(2, out ulong asc )) tmp[i] = tmp[i] with { ASC  = asc  };
-                if (r2[i].TryGetValue(3, out ulong dc  )) tmp[i] = tmp[i] with { DeathComp = dc };
-            }
-
-            lock (Sync) ActorList = tmp;
         }
 
         private static void CacheVitalsLoop()
         {
-            var needResolve = new List<int>(256);
-            var hsReadList  = new List<(int idx, ulong hs)>(256);
-
             while (_running)
             {
                 try
                 {
                     List<ABIPlayer> actors;
                     lock (Sync) actors = ActorList.Count == 0 ? null : new List<ABIPlayer>(ActorList);
-                    if (actors == null || actors.Count == 0) { HighResDelay(2); continue; }
+                    if (actors == null || actors.Count == 0) { HighResDelay(8); continue; }
 
-                    needResolve.Clear();
-                    hsReadList.Clear();
-
+                    // Resolve missing HealthSet once
+                    var needHS = new List<int>(128);
                     for (int i = 0; i < actors.Count; i++)
                     {
-                        if (actors[i].ASC == 0) continue;
-                        if (actors[i].HealthSet == 0) needResolve.Add(i);
-                        else hsReadList.Add((i, actors[i].HealthSet));
+                        var a = actors[i];
+                        if (a.ASC == 0) continue;
+                        if (_actorCache.TryGetValue(a.Pawn, out var ac) && ac.HealthSet != 0) continue;
+                        needHS.Add(i);
                     }
 
-                    // resolve HealthSet from ASC->SpawnedAttributes
-                    if (needResolve.Count > 0)
+                    if (needHS.Count > 0)
                     {
                         using var map = DmaMemory.Scatter();
                         var rd = map.AddRound(false);
 
-                        for (int k = 0; k < needResolve.Count; k++)
+                        for (int k = 0; k < needHS.Count; k++)
                         {
-                            int i = needResolve[k];
-                            ulong asc = actors[i].ASC;
-                            ulong basePtr = asc + (ulong)ABIOffsetsExt.OFF_ASC_ATTRSETS;
+                            int i = needHS[k];
+                            ulong basePtr = actors[i].ASC + (ulong)ABIOffsetsExt.OFF_ASC_ATTRSETS;
                             rd[k].AddValueEntry<ulong>(0, basePtr + 0x0); // Data
                             rd[k].AddValueEntry<int>(1,  basePtr + 0x8); // Num
                         }
                         map.Execute();
 
                         const int MAX_SCAN = 8;
-                        for (int k = 0; k < needResolve.Count; k++)
+                        for (int k = 0; k < needHS.Count; k++)
                         {
-                            int i = needResolve[k];
+                            int i = needHS[k];
                             if (!rd[k].TryGetValue(0, out ulong data) || data == 0) continue;
                             if (!rd[k].TryGetValue(1, out int num ) || num <= 0) continue;
 
@@ -359,43 +407,51 @@ namespace MamboDMA.Games.ABI
 
                             if (resolved != 0)
                             {
-                                actors[i] = actors[i] with { HealthSet = resolved };
-                                hsReadList.Add((i, resolved));
+                                if (!_actorCache.TryGetValue(actors[i].Pawn, out var ac)) ac = new ActorCacheEntry { Pawn = actors[i].Pawn };
+                                ac.HealthSet = resolved;
+                                _actorCache[actors[i].Pawn] = ac;
+                                actors[i] = new ABIPlayer(actors[i].Pawn, actors[i].Mesh, actors[i].Root, actors[i].Name, actors[i].IsBot, actors[i].ASC, resolved, actors[i].DeathComp);
                             }
                         }
 
                         lock (Sync) ActorList = actors;
                     }
 
-                    // read Health/HealthMax
-                    if (hsReadList.Count > 0)
-                    {
-                        using var map = DmaMemory.Scatter();
-                        var r = map.AddRound(false);
-                        for (int k = 0; k < hsReadList.Count; k++)
-                        {
-                            ulong hs = hsReadList[k].hs;
-                            r[k].AddValueEntry<float>(0, hs + (ulong)ABIOffsetsExt.OFF_ATTR_HEALTH);
-                            r[k].AddValueEntry<float>(1, hs + (ulong)ABIOffsetsExt.OFF_ATTR_HEALTHMAX);
-                        }
-                        map.Execute();
+                    // Read vitals (light)
+                    var hsList = new List<(int idx, ulong hs)>(actors.Count);
+                    for (int i = 0; i < actors.Count; i++)
+                        if (actors[i].HealthSet != 0) hsList.Add((i, actors[i].HealthSet));
+                    if (hsList.Count == 0) { HighResDelay(8); continue; }
 
-                        var vitals = new Dictionary<ulong, (float h, float hm)>(hsReadList.Count);
-                        for (int k = 0; k < hsReadList.Count; k++)
-                        {
-                            r[k].TryGetValue(0, out float h);
-                            r[k].TryGetValue(1, out float hm);
-                            var pawn = actors[hsReadList[k].idx].Pawn;
-                            vitals[pawn] = (h, hm);
-                        }
-                        lock (Sync) _pendingVitals = vitals;
+                    using var mapH = DmaMemory.Scatter();
+                    var rh = mapH.AddRound(false);
+                    for (int k = 0; k < hsList.Count; k++)
+                    {
+                        ulong hs = hsList[k].hs;
+                        rh[k].AddValueEntry<float>(0, hs + (ulong)ABIOffsetsExt.OFF_ATTR_HEALTH);
+                        rh[k].AddValueEntry<float>(1, hs + (ulong)ABIOffsetsExt.OFF_ATTR_HEALTHMAX);
                     }
+                    mapH.Execute();
+
+                    var vitals = new Dictionary<ulong, (float h, float hm)>(hsList.Count);
+                    for (int k = 0; k < hsList.Count; k++)
+                    {
+                        rh[k].TryGetValue(0, out float h);
+                        rh[k].TryGetValue(1, out float hm);
+                        var pawn = actors[hsList[k].idx].Pawn;
+                        vitals[pawn] = (h, hm);
+                    }
+                    // stash into ActorPositions merge step (we merge in positions loop)
+                    lock (_pendingVitalsSync) _pendingVitals = vitals;
                 }
                 catch { }
 
-                HighResDelay(2);
+                HighResDelay(8);
             }
         }
+
+        private static readonly object _pendingVitalsSync = new();
+        private static Dictionary<ulong, (float h, float hm)> _pendingVitals;
 
         private static void CachePositionsLoop()
         {
@@ -410,13 +466,18 @@ namespace MamboDMA.Games.ABI
                     lock (Sync)
                     {
                         actors = ActorList.Count == 0 ? null : new List<ABIPlayer>(ActorList);
-                        if (_pendingVitals != null) vitals = new Dictionary<ulong, (float h, float hm)>(_pendingVitals);
+                    }
+                    lock (_pendingVitalsSync)
+                    {
+                        if (_pendingVitals != null)
+                            vitals = new Dictionary<ulong, (float h, float hm)>(_pendingVitals);
                     }
 
                     if (actors != null && actors.Count > 0)
                     {
-                        // Freeze bias snapshot for the frame
-                        var bias = _originBias;
+                        // Snapshot camera bias for this frame
+                        TryGetCameraSnapshot(out var camRaw, out var localRaw, out _, out var camBias);
+                        var frameBias = camBias;
 
                         // Read Root->RelativeLocation (WORLD), CTW pointer, timers/flags
                         var relLoc = new Vector3[actors.Count];
@@ -438,7 +499,6 @@ namespace MamboDMA.Games.ABI
 
                                 if (a.Mesh != 0)
                                 {
-                                    // IMPORTANT: read CTW *pointer*, not inline struct
                                     r[i].AddValueEntry<ulong>(1, a.Mesh + ABIOffsets.USceneComponent_ComponentToWorld_Ptr);
 
                                     ulong timers = a.Mesh + ABIOffsetsExt.OFF_MESH_TIMERS;
@@ -471,7 +531,7 @@ namespace MamboDMA.Games.ABI
                             }
                         }
 
-                        // Now deref CTW pointers to real FTransforms and bias-align Translation for bones
+                        // CTW deref and bias-align
                         var ctwValues = new FTransform[actors.Count];
                         using (var mapB = DmaMemory.Scatter())
                         {
@@ -487,26 +547,22 @@ namespace MamboDMA.Games.ABI
                             {
                                 if (ctwPtrs[i] != 0 && r[i].TryGetValue(0, out FTransform ctw))
                                 {
-                                    // Bias-align CTW once so bone world positions match this frame¡¯s origin
                                     if (float.IsFinite(ctw.Translation.X))
-                                        ctw.Translation += bias;
+                                        ctw.Translation += frameBias;
                                     ctwValues[i] = ctw;
                                 }
-                                else
-                                {
-                                    ctwValues[i] = default;
-                                }
+                                else ctwValues[i] = default;
                             }
                         }
 
-                        // Build positions (Root->RelativeLocation + bias)
+                        // Assemble positions
                         posScratch.Clear();
                         for (int i = 0; i < actors.Count; i++)
                         {
                             var a = actors[i];
                             if (a.Root == 0) continue;
 
-                            Vector3 pos = relLoc[i] + bias;
+                            Vector3 pos = relLoc[i] + frameBias;
 
                             float H = 0f, HM = 0f;
                             if (vitals != null && vitals.TryGetValue(a.Pawn, out var vt))
@@ -525,10 +581,10 @@ namespace MamboDMA.Games.ABI
                             ));
                         }
 
-                        // Keep camera/local aligned to the same bias snapshot
-                        TryGetCameraSnapshot(out var camRaw, out var localRaw, out _, out var camBias);
-                        var camSnap = camRaw; camSnap.Location = camRaw.Location - camBias + bias;
-                        var localSnap = localRaw - camBias + bias;
+                        // Publish full frame (with current camera snapshot rebased to frameBias)
+                        TryGetCameraSnapshot(out var camNow, out var localNow, out _, out var camBiasNow);
+                        var camSnap = camNow; camSnap.Location = camNow.Location - camBiasNow + frameBias;
+                        var localSnap = localNow - camBiasNow + frameBias;
 
                         Interlocked.Increment(ref _frameSeq);
                         _frameBuf = new Frame
@@ -545,26 +601,38 @@ namespace MamboDMA.Games.ABI
                 }
                 catch { }
 
-                HighResDelay(1);
+                HighResDelay(2);
             }
         }
 
-        private static bool TryGetCameraSnapshot(out FMinimalViewInfo cam, out Vector3 local, out float ctrlYaw, out Vector3 camBias)
+        // republish camera-fresh frames frequently so mouse/camera shifts feel instant
+        private static void FramePulseLoop()
         {
-            cam = default; local = default; ctrlYaw = 0f; camBias = default;
-            for (int i = 0; i < 3; i++)
+            while (_running)
             {
-                int s1 = Volatile.Read(ref _camSeq);
-                if ((s1 & 1) != 0) continue;
-                cam     = _camBuf;
-                local   = _camLocalBuf;
-                ctrlYaw = _ctrlYawBuf;
-                camBias = _camBiasBuf;
-                Thread.MemoryBarrier();
-                int s2 = Volatile.Read(ref _camSeq);
-                if (s1 == s2 && (s2 & 1) == 0) return true;
+                try
+                {
+                    List<ActorPos> currentPositions;
+                    lock (Sync) currentPositions = ActorPositions?.Count > 0 ? new List<ActorPos>(ActorPositions) : null;
+                    if (currentPositions != null)
+                    {
+                        // latest camera snapshot
+                        TryGetCameraSnapshot(out var cam, out var local, out _, out _);
+
+                        Interlocked.Increment(ref _frameSeq);
+                        _frameBuf = new Frame
+                        {
+                            Cam = cam,
+                            Local = local,
+                            Positions = currentPositions,
+                            Stamp = System.Diagnostics.Stopwatch.GetTimestamp()
+                        };
+                        Interlocked.Increment(ref _frameSeq);
+                    }
+                }
+                catch { }
+                HighResDelay(1); // very small ¡ª keeps ESP reacting to mouse instantly
             }
-            return false;
         }
 
         private static void CacheSkeletonsLoop()
@@ -583,11 +651,13 @@ namespace MamboDMA.Games.ABI
                     Vector3 local;
                     lock (Sync)
                     {
-                        if (ActorList.Count == 0) { _PruneOldSkeletons(0); HighResDelay(1); continue; }
+                        if (ActorList.Count == 0) { _PruneOldSkeletons(0); HighResDelay(2); continue; }
                         actors = new List<ABIPlayer>(ActorList);
                         positions = new List<ActorPos>(ActorPositions);
                         local = LocalPosition;
                     }
+
+                    if (positions.Count == 0) { HighResDelay(2); continue; }
 
                     var posMap = new Dictionary<ulong, ActorPos>(positions.Count);
                     for (int i = 0; i < positions.Count; i++) posMap[positions[i].Pawn] = positions[i];
@@ -611,7 +681,7 @@ namespace MamboDMA.Games.ABI
                         if (!posMap.TryGetValue(a.Pawn, out var ap)) continue;
                         if (ap.IsDead) continue;
 
-                        // use CTW already bias-aligned in positions pass
+                        // use CTW from positions (already bias-aligned)
                         var ctwLocal = ap.Ctw;
                         if (Skeleton.TryGetWorldBones(a.Mesh, a.Root, in ctwLocal, out var pts, out var dbg))
                         {
@@ -628,6 +698,24 @@ namespace MamboDMA.Games.ABI
                 }
                 catch { }
             }
+        }
+
+        private static bool TryGetCameraSnapshot(out FMinimalViewInfo cam, out Vector3 local, out float ctrlYaw, out Vector3 camBias)
+        {
+            cam = default; local = default; ctrlYaw = 0f; camBias = default;
+            for (int i = 0; i < 3; i++)
+            {
+                int s1 = Volatile.Read(ref _camSeq);
+                if ((s1 & 1) != 0) continue;
+                cam     = _camBuf;
+                local   = _camLocalBuf;
+                ctrlYaw = _ctrlYawBuf;
+                camBias = _camBiasBuf;
+                Thread.MemoryBarrier();
+                int s2 = Volatile.Read(ref _camSeq);
+                if (s1 == s2 && (s2 & 1) == 0) return true;
+            }
+            return false;
         }
 
         private static void _PruneOldSkeletons(long nowTicks)

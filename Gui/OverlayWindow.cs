@@ -1,3 +1,4 @@
+// MamboDMA/OverlayWindow.cs
 using System;
 using System.Numerics;
 using ImGuiNET;
@@ -13,7 +14,6 @@ public sealed class OverlayWindow : IDisposable
     public void Close() => _running = false; 
     private bool _useVsync = false;      // let user pick
     private int  _fpsCap   = 144;        // used when vsync is off
-
     public OverlayWindow(string title = "MamboDMA", int width = 1200, int height = 800)
     {
         Raylib.SetConfigFlags(ConfigFlags.ResizableWindow | ConfigFlags.Msaa4xHint | ConfigFlags.UndecoratedWindow | ConfigFlags.AlwaysRunWindow);
@@ -25,6 +25,7 @@ public sealed class OverlayWindow : IDisposable
         Misc.ApplyAll(); 
         Raylib.ClearWindowState(ConfigFlags.VSyncHint);
         Raylib.SetTargetFPS(_fpsCap);
+
         // ImGui context + renderer hookup
         rlImGui.Setup();
 
@@ -48,7 +49,7 @@ public sealed class OverlayWindow : IDisposable
             drawUI();               // your app UI
             rlImGui.End();
 
-            // NEW: multi-viewport support
+            // Multi-viewport support (lets panels float outside the main window)
             if ((ImGui.GetIO().ConfigFlags & ImGuiConfigFlags.ViewportsEnable) != 0)
             {
                 ImGui.UpdatePlatformWindows();
@@ -64,7 +65,7 @@ public sealed class OverlayWindow : IDisposable
         _useVsync = useVsync;
         _fpsCap = fpsCap;
         UpdateFramePacing();
-    }    
+    }
     private void UpdateFramePacing()
     {
         if (_useVsync)
@@ -91,6 +92,11 @@ public sealed class OverlayWindow : IDisposable
         var io = ImGui.GetIO();
         io.ConfigFlags |= ImGuiConfigFlags.DockingEnable;
         io.ConfigFlags |= ImGuiConfigFlags.ViewportsEnable;
+
+        // Optional multi-viewport polish:
+        io.ConfigViewportsNoTaskBarIcon = true; // floating panels don't spam the taskbar
+        // io.ConfigViewportsNoDecoration = false; // keep native drag/resize chrome
+
         ImGui.StyleColorsDark();
 
         var style = ImGui.GetStyle();
@@ -101,7 +107,7 @@ public sealed class OverlayWindow : IDisposable
         const float baseSize = 16f;
         if ((io.ConfigFlags & ImGuiConfigFlags.ViewportsEnable) != 0)
         {
-            style.WindowRounding = 6f; // you can set 0 if you prefer sharp corners
+            style.WindowRounding = 6f; // (optional) slightly sharper with OS windows
             style.Colors[(int)ImGuiCol.WindowBg].W = 1.00f;
         }
         // Create native font config
@@ -114,8 +120,8 @@ public sealed class OverlayWindow : IDisposable
 
         // Load weights from your Assets/Fonts/static/
         Fonts.Regular = io.Fonts.AddFontFromFileTTF("Assets/Fonts/AlanSans-Medium.ttf", baseSize, cfg);
-        Fonts.Medium = io.Fonts.AddFontFromFileTTF("Assets/Fonts/AlanSans-SemiBold.ttf", baseSize, cfg);
-        Fonts.Bold = io.Fonts.AddFontFromFileTTF("Assets/Fonts/AlanSans-Bold.ttf", baseSize, cfg);
+        Fonts.Medium  = io.Fonts.AddFontFromFileTTF("Assets/Fonts/AlanSans-SemiBold.ttf", baseSize, cfg);
+        Fonts.Bold    = io.Fonts.AddFontFromFileTTF("Assets/Fonts/AlanSans-Bold.ttf", baseSize, cfg);
 
         cfg.Destroy();
 
@@ -152,9 +158,10 @@ public sealed class OverlayWindow : IDisposable
         ImGui.PopStyleVar(3);
 
         var dockspaceId = ImGui.GetID("MamboDockspace");
-        ImGui.DockSpace(dockspaceId, Vector2.Zero, ImGuiDockNodeFlags.PassthruCentralNode); // ← already set
+        ImGui.DockSpace(dockspaceId, Vector2.Zero, ImGuiDockNodeFlags.PassthruCentralNode);
 
         ImGui.End();
         ImGui.PopStyleColor(); // pop WindowBg
-    }    
+    }
+    
 }

@@ -1,3 +1,4 @@
+// MamboDMA/Games/ABI/TimerResolution.cs
 using System.Runtime.InteropServices;
 using System.Threading;
 

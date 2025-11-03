@@ -56,6 +56,7 @@ namespace MamboDMA.Games.DayZ
 
         public void Draw(ImGuiWindowFlags winFlags)
         {
+            if (UiVisibility.MenusHidden) return;
             Config<DayZConfig>.DrawConfigPanel(Name, cfg =>
             {
                 bool vmmReady = MamboDMA.DmaMemory.IsVmmReady;

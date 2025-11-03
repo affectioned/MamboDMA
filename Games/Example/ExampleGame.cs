@@ -73,6 +73,7 @@ namespace MamboDMA.Games.Example
 
         public void Draw(ImGuiWindowFlags winFlags)
         {
+            if (UiVisibility.MenusHidden) return;
             Config<ExampleConfig>.DrawConfigPanel(Name, cfg =>
             {
                 var ready = _running;

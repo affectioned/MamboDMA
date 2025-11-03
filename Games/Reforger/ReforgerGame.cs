@@ -115,6 +115,7 @@ namespace MamboDMA.Games.Reforger
 
         public void Draw(ImGuiWindowFlags winFlags)
         {
+            if (UiVisibility.MenusHidden) return;
             Config<ReforgerConfig>.DrawConfigPanel(Name, cfg =>
             {
                 bool vmmReady = MamboDMA.DmaMemory.IsVmmReady;

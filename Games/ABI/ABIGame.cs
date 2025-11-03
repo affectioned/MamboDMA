@@ -1,11 +1,15 @@
+// MamboDMA/Games/ABI/ABIGame.cs
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Numerics;
-using System.Threading;
 using ImGuiNET;
 using MamboDMA.Services;
 using static MamboDMA.OverlayWindow;
 using static MamboDMA.Misc;
+using MamboDMA.Games;   // Keybind profiles / registry
+using MamboDMA.Input;   // InputManager & Makcu device API
 
 namespace MamboDMA.Games.ABI
 {
@@ -14,41 +18,84 @@ namespace MamboDMA.Games.ABI
         public string Name => "ArenaBreakoutInfinite";
         private bool _initialized, _running;
 
-        private static bool _drawBoxes = true;
-        private static bool _drawNames = true;
-        private static bool _drawDistance = true;
-        private static bool _drawSkeletons = false;
-        private static bool _showDebug = false;
+        // Config shortcut
+        private static ABIGameConfig Cfg => Config<ABIGameConfig>.Settings;
 
-        private static float _maxDistance = 800f;
-        private static float _maxSkeletonDistance = 300f;
+        // Local state for Input Manager & Makcu (ABI panel)
+        private static int _selectedInputIndex = -1;
+        private static List<Device.SerialDeviceInfo> _inputDevices = new();
+        private static bool _inputInitialized = false;
 
-        private static bool  _drawDeathMarkers = true;
-        private static float _deathMarkerMaxDist = 1200f;
-        private static float _deathMarkerBaseSize = 10f;
+        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ aimbot helpers ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        private static readonly string[] _boneNames = new[]
+        {
+            "Pelvis","Spine_01","Spine_02","Spine_03","Neck","Head",
+            "Clavicle_L","UpperArm_L","LowerArm_L","Hand_L",
+            "Clavicle_R","UpperArm_R","LowerArm_R","Hand_R",
+            "Thigh_L","Calf_L","Foot_L","Thigh_R","Calf_R","Foot_R"
+        };
 
-        private static Vector4 _colorPlayer = new(1f, 0.25f, 0.25f, 1f);
-        private static Vector4 _colorBot    = new(0f, 0.6f, 1f, 1f);
+        private static readonly int[] _boneIndices = new[]
+        {
+            Skeleton.IDX_Pelvis, Skeleton.IDX_Spine_01, Skeleton.IDX_Spine_02, Skeleton.IDX_Spine_03, Skeleton.IDX_Neck, Skeleton.IDX_Head,
+            Skeleton.IDX_Clavicle_L, Skeleton.IDX_UpperArm_L, Skeleton.IDX_LowerArm_L, Skeleton.IDX_Hand_L,
+            Skeleton.IDX_Clavicle_R, Skeleton.IDX_UpperArm_R, Skeleton.IDX_LowerArm_R, Skeleton.IDX_Hand_R,
+            Skeleton.IDX_Thigh_L, Skeleton.IDX_Calf_L, Skeleton.IDX_Foot_L, Skeleton.IDX_Thigh_R, Skeleton.IDX_Calf_R, Skeleton.IDX_Foot_R
+        };
 
-        private static Vector4 _colorBoxVisible    = new(0.20f, 1.00f, 0.20f, 1f);
-        private static Vector4 _colorBoxInvisible  = new(1.00f, 0.50f, 0.00f, 1f);
-        private static Vector4 _colorSkelVisible   = new(1.00f, 1.00f, 1.00f, 1f);
-        private static Vector4 _colorSkelInvisible = new(0.70f, 0.70f, 0.70f, 1f);
+        private static readonly int[] _randomPoolDefault = new[]
+        {
+            Skeleton.IDX_Head, Skeleton.IDX_Neck, Skeleton.IDX_Spine_03,
+            Skeleton.IDX_UpperArm_R, Skeleton.IDX_UpperArm_L,
+            Skeleton.IDX_Thigh_R, Skeleton.IDX_Thigh_L
+        };
+        public enum AimbotTargetMode : int
+        {
+            ClosestWorldDistanceInFov = 0,
+            ClosestToCrosshairInFov   = 1,
+        }
+        private static readonly System.Random _rng = new();
 
-        private static Vector4 _deadFill    = new(0, 0, 0, 1f);
-        private static Vector4 _deadOutline = new(1f, 0.84f, 0f, 1f);
+        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ aimbot viz state ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        private static Vector2? _lastAimScreen;      // last screen-space aim point
+        private static long     _lastAimStampTicks;  // Stopwatch ticks of last aim point
+        private static uint U32(Vector4 col) => ImGui.ColorConvertFloat4ToU32(col);
+        private static long NowTicks() => Stopwatch.GetTimestamp();
+        private static double TicksToMs(long dtTicks) => dtTicks * 1000.0 / Stopwatch.Frequency;
 
-        private const string _abiExe = "UAGame.exe";
+        // ABI action names (exposed to Keybinds UI for Category = "ABI")
+        private static readonly string[] AbiActions =
+        {
+            "ABI_ToggleThreads",
+            "ABI_StartThreads",
+            "ABI_StopThreads",
+            "ABI_ToggleBoxes",
+            "ABI_ToggleNames",
+            "ABI_ToggleDistance",
+            "ABI_ToggleSkeletons",
+            "ABI_ToggleDebug",
+            "ABI_ToggleWebRadar",
+            "ABI_Attach",
+            "ABI_DisposeVmm",
+        };
 
         public void Initialize()
         {
             if (_initialized) return;
+
             if (ScreenService.Current.W <= 0 || ScreenService.Current.H <= 0)
                 ScreenService.UpdateFromMonitor(GameSelector.SelectedMonitor);
+
+            // Register ABI actions so the Keybinds panel can list & dispatch them.
+            Keybinds.RegisterCategory("ABI", AbiActions, HandleAbiAction);
+
+            // Ensure a default ABI keybind profile exists.
+            EnsureAbiKeybindProfile();
+
             _initialized = true;
         }
 
-        public void Attach() => VmmService.Attach(_abiExe);
+        public void Attach() => VmmService.Attach(Cfg.AbiExe ?? "UAGame.exe");
 
         public void Dispose()
         {
@@ -63,7 +110,7 @@ namespace MamboDMA.Games.ABI
 
             TimerResolution.Enable1ms();
             Players.StartCache();
-            Logger.Info("[ABI] players cache threads started");
+            Logger.Info("[ABI] cache loops started");
         }
 
         public void Stop()
@@ -74,116 +121,697 @@ namespace MamboDMA.Games.ABI
             Players.Stop();
             TimerResolution.Disable1ms();
             WebRadarUI.StopIfRunning();
-            Logger.Info("[ABI] players cache threads stopped");
+            Logger.Info("[ABI] cache loops stopped");
         }
 
-        public void Tick() { }
+        public void Tick()
+        {
+            if (!_running) return;
+            RunAimbotIfNeeded();
+        }
 
         public void Draw(ImGuiWindowFlags flags)
         {
-            ImGui.Begin("Arena Breakout Infinite", flags | ImGuiWindowFlags.AlwaysAutoResize);
-
-            bool vmmReady = DmaMemory.IsVmmReady;
-            bool attached = DmaMemory.IsAttached;
-
-            ImGui.TextDisabled("Quick Setup");
-            if (!vmmReady)
+            // Overlay-only branch (menus hidden)
+            if (UiVisibility.MenusHidden)
             {
-                if (ImGui.Button("Init VMM")) VmmService.InitOnly();
-                ImGui.SameLine(); ImGui.TextDisabled("¡û initialize before attaching");
-            }
-            else if (!attached)
-            {
-                if (ImGui.Button($"Attach ({_abiExe})")) Attach();
-                ImGui.SameLine(); ImGui.TextDisabled("¡û attaches without process picker");
-            }
-
-            var statusCol = (attached && _running) ? new Vector4(0, 0.8f, 0, 1) :
-                            attached ? new Vector4(0.85f, 0.75f, 0.15f, 1) :
-                                       new Vector4(1, 0.3f, 0.2f, 1);
-            DrawStatusInline(statusCol,
-                attached ? (_running ? "Attached ¡¤ Threads running" : "Attached ¡¤ Threads stopped")
-                         : "Not attached");
-
-            ImGui.Separator();
-            ImGui.Checkbox("Draw Boxes", ref _drawBoxes);
-            ImGui.Checkbox("Draw Names", ref _drawNames);
-            ImGui.Checkbox("Draw Distance", ref _drawDistance);
-            ImGui.Checkbox("Draw Skeletons", ref _drawSkeletons);
-            ImGui.Checkbox("Show Debug Info", ref _showDebug);
-            ImGui.SliderFloat("Max Draw Distance (m)", ref _maxDistance, 50f, 3000f);
-            ImGui.SliderFloat("Skeleton Draw Distance (m)", ref _maxSkeletonDistance, 25f, 2000f);
-
-            ImGui.Separator();
-            ImGui.Text("ESP Colors");
-            ImGui.ColorEdit4("Box Visible", ref _colorBoxVisible);
-            ImGui.ColorEdit4("Box Invisible", ref _colorBoxInvisible);
-            ImGui.ColorEdit4("Skel Visible", ref _colorSkelVisible);
-            ImGui.ColorEdit4("Skel Invisible", ref _colorSkelInvisible);
-
-            ImGui.Text("Base Labels");
-            ImGui.ColorEdit4("Player", ref _colorPlayer);
-            ImGui.ColorEdit4("Bot", ref _colorBot);
-
-            ImGui.Text("Dead Marker");
-            ImGui.Checkbox("Enable Death Markers", ref _drawDeathMarkers);
-            ImGui.SliderFloat("Max Marker Distance (m)", ref _deathMarkerMaxDist, 50f, 5000f);
-            ImGui.SliderFloat("Marker Base Size (px)", ref _deathMarkerBaseSize, 4f, 24f);
-            ImGui.ColorEdit4("Dead Fill", ref _deadFill);
-            ImGui.ColorEdit4("Dead Outline", ref _deadOutline);
-
-            ImGui.Separator();
-            WebRadarUI.DrawPanel();
-
-            ImGui.Separator();
-            if (!attached) ImGui.BeginDisabled();
-            if (ImGui.Button(_running ? "Stop Threads" : "Start Threads"))
-            { if (_running) Stop(); else Start(); }
-            if (!attached) ImGui.EndDisabled();
-
-            ImGui.SameLine();
-            if (ImGui.Button("Dispose VMM")) Dispose();
-
-            if (!attached) { ImGui.End(); return; }
-
-            if (_showDebug)
-            {
-                ImGui.Separator();
-                ImGui.Text("©¤ Debug Info ©¤");
-                ImGui.Text($"UWorld: 0x{Players.UWorld:X}");
-                ImGui.Text($"UGameInstance: 0x{Players.UGameInstance:X}");
-                ImGui.Text($"GameState: 0x{Players.GameState:X}");
-                ImGui.Text($"PersistentLevel: 0x{Players.PersistentLevel:X}");
-                ImGui.Text($"ActorCount: {Players.ActorCount}");
-                ImGui.Text($"ActorList.Count: {Players.ActorList.Count}");
-                ImGui.Text($"LocalPawn: 0x{Players.LocalPawn:X}");
-                ImGui.Text($"LocalRoot: 0x{Players.LocalRoot:X}");
-                ImGui.Text($"CameraMgr: 0x{Players.LocalCameraMgr:X}");
-                ImGui.Text($"CameraFov: {Players.Camera.Fov:F1}");
-                ImGui.Text($"LocalPos: {Players.LocalPosition}");
-                ImGui.Text($"CtrlYaw: {Players.CtrlYaw:F1}");
-
-                DrawPlayersDebugWindow();
-            }
-
-            ImGui.End();
-
-            if (_running)
-            {
-                if (Players.ActorList.Count > 0)
+                if (_running && Players.ActorList.Count > 0)
                 {
                     ABIESP.Render(
-                        _drawBoxes, _drawNames, _drawDistance, _drawSkeletons,
-                        _drawDeathMarkers, _deathMarkerMaxDist, _deathMarkerBaseSize,
-                        _maxDistance, _maxSkeletonDistance,
-                        _colorPlayer, _colorBot,
-                        _colorBoxVisible, _colorBoxInvisible,
-                        _colorSkelVisible, _colorSkelInvisible,
-                        _deadFill, _deadOutline);
+                        Cfg.DrawBoxes, Cfg.DrawNames, Cfg.DrawDistance, Cfg.DrawSkeletons,
+                        Cfg.DrawDeathMarkers, Cfg.DeathMarkerMaxDist, Cfg.DeathMarkerBaseSize,
+                        Cfg.MaxDistance, Cfg.MaxSkeletonDistance,
+                        Cfg.ColorPlayer, Cfg.ColorBot,
+                        Cfg.ColorBoxVisible, Cfg.ColorBoxInvisible,
+                        Cfg.ColorSkelVisible, Cfg.ColorSkelInvisible,
+                        Cfg.DeadFill, Cfg.DeadOutline);
                 }
+
+                // FOV circle + aimline when aimbot enabled
+                DrawAimbotOverlay();
+                return; // IMPORTANT: don't open any ImGui windows
+            }
+
+            Config<ABIGameConfig>.DrawConfigPanel(Name, cfg =>
+            {
+                bool vmmReady = DmaMemory.IsVmmReady;
+                bool attached = DmaMemory.IsAttached;
+
+                // Status chip
+                var statusCol = (attached && _running) ? new Vector4(0, 0.8f, 0, 1) :
+                                attached ? new Vector4(0.85f, 0.75f, 0.15f, 1) :
+                                           new Vector4(1, 0.3f, 0.2f, 1);
+                DrawStatusInline(statusCol,
+                    attached ? (_running ? "Attached ¡¤ Threads running" : "Attached ¡¤ Threads stopped")
+                             : "Not attached");
+
+                ImGui.Separator();
+
+                // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+                // Tabs inside the ABI panel
+                if (ImGui.BeginTabBar("ABI_Tabs", ImGuiTabBarFlags.NoCloseWithMiddleMouseButton))
+                {
+                    // ©¤©¤ MAIN TAB ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+                    if (ImGui.BeginTabItem("Main"))
+                    {
+                        ImGui.TextDisabled("VMM & Attach");
+                        if (!vmmReady)
+                        {
+                            if (ImGui.Button("Init VMM")) VmmService.InitOnly();
+                            ImGui.SameLine(); ImGui.TextDisabled("¡û initialize before attaching");
+                        }
+                        else
+                        {
+                            ImGui.InputText("Process Name", ref cfg.AbiExe, 128);
+                            if (!attached)
+                            {
+                                if (ImGui.Button($"Attach ({cfg.AbiExe})")) Attach();
+                                ImGui.SameLine(); ImGui.TextDisabled("¡û attaches without process picker");
+                            }
+                        }
+
+                        ImGui.SameLine();
+                        if (ImGui.Button("Dispose VMM")) Dispose();
+
+                        ImGui.Separator();
+
+                        // Start/Stop worker threads
+                        if (!attached) ImGui.BeginDisabled();
+                        if (ImGui.Button(_running ? "Stop Threads" : "Start Threads"))
+                        { if (_running) Stop(); else Start(); }
+                        if (!attached) ImGui.EndDisabled();
+
+                        ImGui.Separator();
+                        DrawInputManagerBlock(vmmReady);
+
+                        ImGui.EndTabItem();
+                    }
+
+                    // ©¤©¤ ESP TAB ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+                    if (ImGui.BeginTabItem("ESP"))
+                    {
+                        if (ImGui.CollapsingHeader("Basics", ImGuiTreeNodeFlags.DefaultOpen))
+                        {
+                            ImGui.Checkbox("Draw Boxes", ref cfg.DrawBoxes);
+                            ImGui.Checkbox("Draw Names", ref cfg.DrawNames);
+                            ImGui.Checkbox("Draw Distance", ref cfg.DrawDistance);
+                            ImGui.Checkbox("Draw Skeletons", ref cfg.DrawSkeletons);
+                            ImGui.Checkbox("Show Debug Info", ref cfg.ShowDebug);
+
+                            ImGui.SliderFloat("Max Draw Distance (m)", ref cfg.MaxDistance, 50f, 3000f, "%.0f");
+                            ImGui.SliderFloat("Skeleton Draw Distance (m)", ref cfg.MaxSkeletonDistance, 25f, 2000f, "%.0f");
+                        }
+
+                        if (ImGui.CollapsingHeader("Death Markers"))
+                        {
+                            ImGui.Checkbox("Enable Death Markers", ref cfg.DrawDeathMarkers);
+                            ImGui.SliderFloat("Max Marker Distance (m)", ref cfg.DeathMarkerMaxDist, 50f, 5000f, "%.0f");
+                            ImGui.SliderFloat("Marker Base Size (px)", ref cfg.DeathMarkerBaseSize, 4f, 24f, "%.0f");
+                        }
+
+                        ImGui.EndTabItem();
+                    }
+
+                    // ©¤©¤ WEBRADAR TAB ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+                    if (ImGui.BeginTabItem("WebRadar"))
+                    {
+                        WebRadarUI.DrawPanel();
+                        ImGui.EndTabItem();
+                    }
+
+                    // ©¤©¤ COLORS TAB ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+                    if (ImGui.BeginTabItem("Colors"))
+                    {
+                        ImGui.Text("ESP Colors");
+                        ImGui.ColorEdit4("Box Visible", ref cfg.ColorBoxVisible);
+                        ImGui.ColorEdit4("Box Invisible", ref cfg.ColorBoxInvisible);
+                        ImGui.ColorEdit4("Skel Visible", ref cfg.ColorSkelVisible);
+                        ImGui.ColorEdit4("Skel Invisible", ref cfg.ColorSkelInvisible);
+
+                        ImGui.Separator();
+                        ImGui.Text("Base Labels");
+                        ImGui.ColorEdit4("Player", ref cfg.ColorPlayer);
+                        ImGui.ColorEdit4("Bot", ref cfg.ColorBot);
+
+                        ImGui.Separator();
+                        ImGui.Text("Death Marker Colors");
+                        ImGui.ColorEdit4("Dead Fill", ref cfg.DeadFill);
+                        ImGui.ColorEdit4("Dead Outline", ref cfg.DeadOutline);
+
+                        ImGui.EndTabItem();
+                    }
+
+                    // ©¤©¤ AIMBOT TAB ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+                    if (ImGui.BeginTabItem("Aimbot"))
+                    {
+                        ImGui.TextDisabled("Simple Makcu aimbot (hold key/button to run)");
+                        ImGui.Checkbox("Enable Aimbot", ref cfg.AimbotEnabled);
+                        ImGui.SameLine();
+                        ImGui.Checkbox("Require Visible", ref cfg.AimbotRequireVisible);
+
+                        ImGui.Checkbox("Headshot AI", ref cfg.AimbotHeadshotAI);
+                        ImGui.SameLine();
+                        ImGui.Checkbox("Target only AI", ref cfg.AimbotTargetAIOnly);
+                        ImGui.SameLine();
+                        ImGui.Checkbox("Only PMC", ref cfg.AimbotTargetPMCOnly);
+
+                        ImGui.Separator();
+
+                        // Target bone
+                        int selBone = Array.IndexOf(_boneIndices, cfg.AimbotTargetBone);
+                        if (selBone < 0) selBone = Array.IndexOf(_boneIndices, Skeleton.IDX_Head);
+                        if (ImGui.BeginCombo("Target Bone", _boneNames[Math.Clamp(selBone, 0, _boneNames.Length - 1)]))
+                        {
+                            for (int i = 0; i < _boneNames.Length; i++)
+                            {
+                                bool selected = (i == selBone);
+                                if (ImGui.Selectable(_boneNames[i], selected))
+                                {
+                                    selBone = i;
+                                    cfg.AimbotTargetBone = _boneIndices[i];
+                                }
+                                if (selected) ImGui.SetItemDefaultFocus();
+                            }
+                            ImGui.EndCombo();
+                        }
+
+                        ImGui.Checkbox("Random Bone", ref cfg.AimbotRandomBone);
+                        // Target selection mode
+                        string[] tgtModes = new[]
+                        {
+                            "Closest by distance (within FOV)",
+                            "Closest to crosshair (within FOV)"
+                        };
+                        int modeIdx = (int)cfg.AimbotTargetMode;
+                        if (ImGui.BeginCombo("Target Select Mode", tgtModes[Math.Clamp(modeIdx, 0, tgtModes.Length - 1)]))
+                        {
+                            for (int i = 0; i < tgtModes.Length; i++)
+                            {
+                                bool sel = (i == modeIdx);
+                                if (ImGui.Selectable(tgtModes[i], sel))
+                                {
+                                    modeIdx = i;
+                                    cfg.AimbotTargetMode = (AimbotTargetMode)i;
+                                }
+                                if (sel) ImGui.SetItemDefaultFocus();
+                            }
+                            ImGui.EndCombo();
+                        }
+                        ImGui.SameLine();
+                        ImGui.TextDisabled("(filters inside FOV)");
+
+                        ImGui.SliderFloat("Max Distance (m)", ref cfg.AimbotMaxMeters, 10f, 2000f, "%.0f");
+                        ImGui.SliderFloat("Max FOV (px)", ref cfg.AimbotFovPx, 50f, 1200f, "%.0f");
+                        ImGui.SliderFloat("Pixel Power (x) [<= 0.20 best]", ref cfg.AimbotPixelPower, 0.01f, 0.50f, "%.2f");
+                        ImGui.SliderFloat("Smooth Segments (N/A)", ref cfg.AimbotSmoothSegments, 1f, 12f, "%.0f");
+                        ImGui.SliderFloat("Deadzone (px)", ref cfg.AimbotDeadzonePx, 0f, 8f, "%.1f");
+
+                        ImGui.Separator();
+                        ImGui.TextDisabled("Trigger (hold to aim):");
+
+                        // Keyboard via InputManager
+                        int[] keys = new[]
+                        {
+                            0x02, /* RButton */
+                            0x01, /* LButton */
+                            0x12, /* Alt (MENU) */
+                            0x10, /* Shift */
+                            0x11, /* Ctrl */
+                            0x05, /* XBUTTON1 (Mouse4) */
+                            0x06, /* XBUTTON2 (Mouse5) */
+                            0x14, /* CapsLock */
+                            0x56, /* V */
+                            0x46, /* F */
+                            0x51, /* Q */
+                            0x45, /* E */
+                            0x58, /* X */
+                            0x5A, /* Z */
+                        };
+                        string[] keyNames = new[] { "RButton", "LButton", "Alt", "Shift", "Ctrl", "Mouse4", "Mouse5", "Caps", "V", "F", "Q", "E", "X", "Z" };
+                        int keySel = Array.IndexOf(keys, cfg.AimbotKey);
+                        if (keySel < 0) keySel = 0;
+                        if (ImGui.BeginCombo("Aimbot Key (KB)", keyNames[keySel]))
+                        {
+                            for (int i = 0; i < keys.Length; i++)
+                            {
+                                bool selected = (i == keySel);
+                                if (ImGui.Selectable(keyNames[i], selected))
+                                {
+                                    keySel = i;
+                                    cfg.AimbotKey = keys[i];
+                                }
+                                if (selected) ImGui.SetItemDefaultFocus();
+                            }
+                            ImGui.EndCombo();
+                        }
+
+                        // Makcu hold button
+                        var mb = cfg.AimbotMakcuHoldButton;
+                        var mbNames = new[] { "Left", "Right", "Middle", "Mouse4", "Mouse5" };
+                        var mbVals  = new[] { MakcuMouseButton.Left, MakcuMouseButton.Right, MakcuMouseButton.Middle, MakcuMouseButton.mouse4, MakcuMouseButton.mouse5 };
+                        int mbSel = Array.IndexOf(mbVals, mb);
+                        if (mbSel < 0) mbSel = 3;
+                        if (ImGui.BeginCombo("Makcu Hold Button", mbNames[mbSel]))
+                        {
+                            for (int i = 0; i < mbVals.Length; i++)
+                            {
+                                bool selected = (i == mbSel);
+                                if (ImGui.Selectable(mbNames[i], selected))
+                                {
+                                    mbSel = i; cfg.AimbotMakcuHoldButton = mbVals[i];
+                                }
+                                if (selected) ImGui.SetItemDefaultFocus();
+                            }
+                            ImGui.EndCombo();
+                        }
+
+                        ImGui.Separator();
+                        ImGui.TextDisabled($"Makcu: {(Device.connected ? "Connected" : "Disconnected")} ¡¤ InputManager: {(InputManager.IsReady ? "Ready" : "Not Ready")}");
+
+                        ImGui.EndTabItem();
+                    }
+
+                    ImGui.EndTabBar();
+                }
+
+                if (cfg.ShowDebug)
+                {
+                    ImGui.Separator();
+                    ImGui.Text("©¤ Debug Info ©¤");
+                    ImGui.Text($"UWorld: 0x{Players.UWorld:X}");
+                    ImGui.Text($"UGameInstance: 0x{Players.UGameInstance:X}");
+                    ImGui.Text($"GameState: 0x{Players.GameState:X}");
+                    ImGui.Text($"PersistentLevel: 0x{Players.PersistentLevel:X}");
+                    ImGui.Text($"ActorCount: {Players.ActorCount}");
+                    ImGui.Text($"ActorList.Count: {Players.ActorList.Count}");
+                    ImGui.Text($"LocalPawn: 0x{Players.LocalPawn:X}");
+                    ImGui.Text($"LocalRoot: 0x{Players.LocalRoot:X}");
+                    ImGui.Text($"CameraMgr: 0x{Players.LocalCameraMgr:X}");
+                    ImGui.Text($"CameraFov: {Players.Camera.Fov:F1}");
+                    ImGui.Text($"LocalPos: {Players.LocalPosition}");
+                    ImGui.Text($"CtrlYaw: {Players.CtrlYaw:F1}");
+
+                    DrawPlayersDebugWindow();
+                }
+
+                // Overlays also while panel is open
+                if (_running && Players.ActorList.Count > 0)
+                {
+                    ABIESP.Render(
+                        Cfg.DrawBoxes, Cfg.DrawNames, Cfg.DrawDistance, Cfg.DrawSkeletons,
+                        Cfg.DrawDeathMarkers, Cfg.DeathMarkerMaxDist, Cfg.DeathMarkerBaseSize,
+                        Cfg.MaxDistance, Cfg.MaxSkeletonDistance,
+                        Cfg.ColorPlayer, Cfg.ColorBot,
+                        Cfg.ColorBoxVisible, Cfg.ColorBoxInvisible,
+                        Cfg.ColorSkelVisible, Cfg.ColorSkelInvisible,
+                        Cfg.DeadFill, Cfg.DeadOutline);
+                }
+
+                // FOV circle + aimline
+                DrawAimbotOverlay();
+            });
+        }
+
+        // ---------- AIMBOT CORE ----------
+        private void RunAimbotIfNeeded()
+        {
+            var cfg = Cfg;
+            if (!cfg.AimbotEnabled) return;
+
+            // Trigger priority: InputManager > Makcu
+            bool keyHeld = false;
+            bool makcuHeld = false;
+
+            if (InputManager.IsReady)
+            {
+                keyHeld = InputManager.IsKeyDown(cfg.AimbotKey);
+                makcuHeld = false;
+            }
+            else
+            {
+                makcuHeld = Device.connected &&
+                            Device.bState != null &&
+                            Device.button_pressed(cfg.AimbotMakcuHoldButton);
+            }
+
+            if (!(keyHeld || makcuHeld)) return;
+
+            if (!Players.TryGetFrame(out var fr)) return;
+            if (fr.Positions == null || fr.Positions.Count == 0) return;
+
+            // Choose best target
+            var best = FindBestTarget(fr, cfg, cfg.AimbotTargetMode, out _, out Vector2 aimScreen);
+            if (!best.HasValue) return;
+
+            float W = ScreenService.Current.W;
+            float H = ScreenService.Current.H;
+            var center = new Vector2(W * 0.5f, H * 0.5f);
+            var delta = aimScreen - center; // already within FOV by selector
+
+            // Deadzone
+            if (MathF.Abs(delta.X) < cfg.AimbotDeadzonePx && MathF.Abs(delta.Y) < cfg.AimbotDeadzonePx)
+                return;
+
+            // Save target point for overlay
+            _lastAimScreen     = aimScreen;
+            _lastAimStampTicks = NowTicks();
+
+            // Pixel power hard clamp (<= 0.20)
+            float power = Math.Clamp(cfg.AimbotPixelPower, 0.01f, 0.20f);
+            int moveX = (int)MathF.Round(delta.X * power);
+            int moveY = (int)MathF.Round(delta.Y * power);
+
+            if (Device.connected)
+            {
+                // Only Device.move ¡ª move_smooth is unstable
+                Device.move(moveX, moveY);
             }
         }
 
+        private Players.ActorPos? FindBestTarget(
+            Players.Frame fr,
+            ABIGameConfig cfg,
+            AimbotTargetMode mode,
+            out Vector3 aimWorld,
+            out Vector2 aimScreen)
+        {
+            aimWorld = default;
+            aimScreen = default;
+
+            var posList = fr.Positions;
+            if (posList == null || posList.Count == 0) return null;
+
+            float W = ScreenService.Current.W;
+            float H = ScreenService.Current.H;
+            var center = new Vector2(W * 0.5f, H * 0.5f);
+            float maxFov = Math.Max(16f, cfg.AimbotFovPx);
+
+            Players.ActorPos? best = null;
+            float bestMetric = float.MaxValue; // metric depends on mode
+
+            for (int i = 0; i < posList.Count; i++)
+            {
+                var ap = posList[i];
+                if (ap.IsDead) continue;
+
+                if (cfg.AimbotRequireVisible && !ap.IsVisible) continue;
+
+                // Identify AI vs PMC from current ActorList (unchanged)
+                bool? isBot = null;
+                lock (Players.Sync)
+                {
+                    for (int j = 0; j < Players.ActorList.Count; j++)
+                    {
+                        if (Players.ActorList[j].Pawn == ap.Pawn)
+                        {
+                            isBot = Players.ActorList[j].IsBot;
+                            break;
+                        }
+                    }
+                }
+                if (cfg.AimbotTargetAIOnly && isBot != true) continue;
+                if (cfg.AimbotTargetPMCOnly && isBot != false) continue;
+
+                float distM = (fr.Local != default)
+                    ? Vector3.Distance(fr.Local, ap.Position) / 100f
+                    : float.MaxValue;
+
+                if (distM > cfg.AimbotMaxMeters) continue;
+
+                // Select bone as before
+                int targetBone = SelectBone(cfg, isBot == true);
+                if (!TryGetBoneWorld(ap, targetBone, out var hitWorld))
+                {
+                    if (!TryGetBoneWorld(ap, Skeleton.IDX_Head, out hitWorld))
+                        hitWorld = ap.Position;
+                }
+
+                if (!ABIMath.WorldToScreen(hitWorld, fr.Cam, W, H, out var pt))
+                    continue;
+
+                // FOV gate here (so we only consider candidates inside FOV)
+                float pixelDist = Vector2.Distance(center, pt);
+                if (pixelDist > maxFov) continue;
+
+                float metric = mode switch
+                {
+                    AimbotTargetMode.ClosestWorldDistanceInFov => distM,
+                    AimbotTargetMode.ClosestToCrosshairInFov => pixelDist,
+                    _ => pixelDist
+                };
+
+                if (metric < bestMetric)
+                {
+                    bestMetric = metric;
+                    best = ap;
+                    aimWorld = hitWorld;
+                    aimScreen = pt;
+                }
+            }
+
+            return best;
+        }
+
+        private static int SelectBone(ABIGameConfig cfg, bool isAI)
+        {
+            if (isAI && cfg.AimbotHeadshotAI) return Skeleton.IDX_Head;
+            if (cfg.AimbotRandomBone)
+            {
+                var pool = _randomPoolDefault;
+                return pool[new Random().Next(0, pool.Length)];
+            }
+            int idx = cfg.AimbotTargetBone;
+            if (idx < 0 || idx >= _boneIndices.Length) idx = Skeleton.IDX_Head;
+            return idx;
+        }
+
+        private static bool TryGetBoneWorld(in Players.ActorPos ap, int boneIdx, out Vector3 ws)
+        {
+            ws = default;
+            if (boneIdx < 0) return false;
+
+            if (Players.TryGetSkeleton(ap.Pawn, out var pts) && pts != null && boneIdx < pts.Length)
+            {
+                ws = pts[boneIdx];
+                return true;
+            }
+            return false;
+        }
+
+        // ---------- Aimbot overlay (FOV circle + aim line) ----------
+        private static void DrawAimbotOverlay()
+        {
+            var cfg = Cfg;
+            if (!cfg.AimbotEnabled) return;
+
+            float W = ScreenService.Current.W;
+            float H = ScreenService.Current.H;
+            var center = new Vector2(W * 0.5f, H * 0.5f);
+
+            var dl = ImGui.GetBackgroundDrawList();
+
+            // FOV circle
+            float r = Math.Max(4f, cfg.AimbotFovPx);
+            const float fovThickness = 1.6f;
+            uint fovCol = U32(new Vector4(1f, 1f, 1f, 0.33f));
+            dl.AddCircle(center, r, fovCol, 64, fovThickness);
+
+            // Aim line to recent target
+            const double maxAgeMs = 350.0;
+            if (_lastAimScreen.HasValue && TicksToMs(NowTicks() - _lastAimStampTicks) <= maxAgeMs)
+            {
+                var tgt = _lastAimScreen.Value;
+
+                uint lineCol = U32(new Vector4(0.2f, 0.9f, 0.2f, 0.90f));
+                const float lineThickness = 2.0f;
+
+                uint dotFill  = U32(new Vector4(0.2f, 0.9f, 0.2f, 0.90f));
+                uint dotRing  = U32(new Vector4(0f, 0f, 0f, 0.90f));
+
+                dl.AddLine(center, tgt, lineCol, lineThickness);
+                dl.AddCircleFilled(tgt, 4f, dotFill, 24);
+                dl.AddCircle(tgt, 4f, dotRing, 24, 1.6f);
+            }
+        }
+
+        // ---------- Input Manager & Makcu ----------
+        private static void DrawInputManagerBlock(bool vmmReady)
+        {
+            ImGui.TextDisabled("Input Manager & Makcu");
+
+            if (ImGui.Button("Refresh Devices"))
+            {
+                JobSystem.Schedule(() =>
+                {
+                    _inputDevices = Device.EnumerateSerialDevices();
+                    if (_selectedInputIndex >= _inputDevices.Count) _selectedInputIndex = -1;
+                });
+            }
+
+            ImGui.Separator();
+            ImGui.Text("Serial Devices:");
+
+            string preview = (_selectedInputIndex >= 0 && _selectedInputIndex < _inputDevices.Count)
+                ? _inputDevices[_selectedInputIndex].ToString()
+                : "(none)";
+            ImGui.SetNextItemWidth(400);
+            if (ImGui.BeginCombo("##AbiInputDevices", preview))
+            {
+                for (int i = 0; i < _inputDevices.Count; i++)
+                {
+                    bool sel = (i == _selectedInputIndex);
+                    if (ImGui.Selectable(_inputDevices[i].ToString(), sel))
+                        _selectedInputIndex = i;
+                    if (sel) ImGui.SetItemDefaultFocus();
+                }
+                ImGui.EndCombo();
+            }
+
+            ImGui.Separator();
+            ImGui.TextDisabled("Makcu Device");
+
+            if (ImGui.Button("Connect Makcu"))
+            {
+                if (_selectedInputIndex >= 0 && _selectedInputIndex < _inputDevices.Count)
+                {
+                    var dev = _inputDevices[_selectedInputIndex];
+                    JobSystem.Schedule(() =>
+                    {
+                        if (Device.MakcuConnect(dev.Port))
+                            Console.WriteLine($"[+] Makcu connected on {dev.Port}");
+                        else
+                            Console.WriteLine("[-] Makcu connect failed");
+                    });
+                }
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("Disconnect Makcu"))
+            {
+                JobSystem.Schedule(() =>
+                {
+                    Device.Disconnect();
+                    Console.WriteLine("[*] Makcu disconnected");
+                });
+            }
+
+            ImGui.Separator();
+            ImGui.TextDisabled("Input Manager");
+
+            if (!vmmReady) ImGui.BeginDisabled();
+            if (ImGui.Button("Init InputManager"))
+            {
+                JobSystem.Schedule(() =>
+                {
+                    var adapter = new DmaMemory.VmmSharpExAdapter(DmaMemory.Vmm!);
+                    InputManager.BeginInitializeWithRetries(
+                        adapter,
+                        TimeSpan.FromSeconds(1),
+                        onComplete: (ok, err) =>
+                        {
+                            if (ok) Console.WriteLine("[+] InputManager ready.");
+                            else Console.WriteLine($"[-] InputManager init failed: {err}");
+                        });
+                    _inputInitialized = true;
+                });
+            }
+            if (!vmmReady)
+            {
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Init blocked: VMM not initialized.");
+                ImGui.EndDisabled();
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("Shutdown InputManager"))
+            {
+                JobSystem.Schedule(() =>
+                {
+                    InputManager.Shutdown();
+                    _inputInitialized = false;
+                    Console.WriteLine("[*] InputManager shut down");
+                });
+            }
+
+            ImGui.Separator();
+            DrawStatusLight("Makcu Connected", Device.connected);
+            DrawStatusLight("InputManager Ready", InputManager.IsReady);
+        }
+
+        private static void DrawStatusLight(string label, bool state)
+        {
+            var dl = ImGui.GetWindowDrawList();
+            var p = ImGui.GetCursorScreenPos();
+            float y = p.Y + ImGui.GetTextLineHeight() * 0.5f;
+            Vector4 col = state
+                ? new Vector4(0, 0.8f, 0, 1)
+                : new Vector4(0.9f, 0.3f, 0.1f, 1);
+            dl.AddCircleFilled(new Vector2(p.X + 6, y), 5, ImGui.ColorConvertFloat4ToU32(col));
+            ImGui.Dummy(new Vector2(16, ImGui.GetTextLineHeight()));
+            ImGui.SameLine();
+            ImGui.TextDisabled(label);
+        }
+
+        // ---------- Keybinds integration ----------
+        private void HandleAbiAction(string action)
+        {
+            switch (action)
+            {
+                case "ABI_ToggleThreads":
+                    if (_running) Stop(); else Start();
+                    break;
+                case "ABI_StartThreads":
+                    if (!_running) Start();
+                    break;
+                case "ABI_StopThreads":
+                    if (_running) Stop();
+                    break;
+
+                case "ABI_ToggleBoxes":      Cfg.DrawBoxes     = !Cfg.DrawBoxes; break;
+                case "ABI_ToggleNames":      Cfg.DrawNames     = !Cfg.DrawNames; break;
+                case "ABI_ToggleDistance":   Cfg.DrawDistance  = !Cfg.DrawDistance; break;
+                case "ABI_ToggleSkeletons":  Cfg.DrawSkeletons = !Cfg.DrawSkeletons; break;
+                case "ABI_ToggleDebug":      Cfg.ShowDebug     = !Cfg.ShowDebug; break;
+
+                case "ABI_Attach":
+                    Attach();
+                    break;
+
+                case "ABI_DisposeVmm":
+                    Dispose();
+                    break;
+            }
+        }
+
+        private static void EnsureAbiKeybindProfile()
+        {
+            // Configs/ABI/abi.keybinds.json
+            var root = Path.Combine(AppContext.BaseDirectory, "Configs", "ABI");
+            var path = Path.Combine(root, "abi.keybinds.json");
+            if (File.Exists(path)) return;
+
+            Directory.CreateDirectory(root);
+
+            var prof = new KeybindProfile
+            {
+                ProfileName = "ABI Keybinds",
+                Category = "ABI",
+                Binds = new List<KeybindEntry>
+                {
+                    new KeybindEntry { Name="ABI: Toggle Threads", Vk=0x75 /* F6 */, Mode=KeybindMode.OnPress, Action="ABI_ToggleThreads" },
+                    new KeybindEntry { Name="ABI: Toggle Boxes",   Vk=0xC0 /* `  */, Mode=KeybindMode.OnPress, Action="ABI_ToggleBoxes" },
+                    new KeybindEntry { Name="ABI: Toggle Names",   Vk=0x4E /* N  */, Mode=KeybindMode.OnPress, Action="ABI_ToggleNames" },
+                    new KeybindEntry { Name="ABI: Toggle Dist",    Vk=0x44 /* D  */, Mode=KeybindMode.OnPress, Action="ABI_ToggleDistance" },
+                    new KeybindEntry { Name="ABI: Toggle Skel",    Vk=0x53 /* S  */, Mode=KeybindMode.OnPress, Action="ABI_ToggleSkeletons" },
+                    new KeybindEntry { Name="ABI: Toggle Debug",   Vk=0x47 /* G  */, Mode=KeybindMode.OnPress, Action="ABI_ToggleDebug" },
+                    new KeybindEntry { Name="ABI: Web Radar",      Vk=0x52 /* R  */, Mode=KeybindMode.OnPress, Action="ABI_ToggleWebRadar" },
+                    new KeybindEntry { Name="ABI: Attach",         Vk=0x41 /* A  */, Mode=KeybindMode.OnPress, Action="ABI_Attach" },
+                    new KeybindEntry { Name="ABI: Dispose VMM",    Vk=0x58 /* X  */, Mode=KeybindMode.OnPress, Action="ABI_DisposeVmm" },
+                }
+            };
+
+            KeybindRegistry.Save(path, prof);
+        }
+
+        // ---------- existing debug table ----------
         private static void DrawPlayersDebugWindow()
         {
             if (!Players.TryGetFrame(out var fr)) return;
