@@ -112,11 +112,11 @@ namespace ArmaReforgerFeeder
     public static class Off
     {
         // Game / world
-        public const ulong Game = 0x1D59488;
+        public const ulong Game = 0x213A388;
         public const ulong GameWorld = 0x130;
         public const ulong LocalPlayerController = 0x378;
         public const ulong LocalPlayer = 0x08;
-        public const ulong PlayerManager  = 0x2D0;   // you already have this
+        public const ulong PlayerManager  = 0x2C8;   // you already have this
         public static ulong PmPlayerArray = 0x18;    // vector<Player*> 
         public static ulong PmPlayerCount = 0x24;    // int
         public static ulong Player_Name   = 0x18;    // ptr to UTF8 name
@@ -142,7 +142,7 @@ namespace ArmaReforgerFeeder
         public const ulong InvertedViewUp = 0x7C;
         public const ulong VectorViewForward = 0x88;
         public const ulong CameraViewType = 0x1C8;
-        public const ulong CameraZoom = 0x214;
+        public const ulong CameraZoom = 0x20C;
         public const ulong ZoomIncreaseFactor = 0x18C;
 
         // Entities
@@ -180,8 +180,8 @@ namespace ArmaReforgerFeeder
         public const ulong MeshObject = 0x30;
         public const ulong MeshComponentBones = 0x40;
         public const ulong MeshComponentBonesMatrixSize = 0x30;
-        public const ulong MeshObjectBonesCount = 0x100;
-        public const ulong MeshObjectBonesList = 0xE0;
+        public const ulong MeshObjectBonesCount = 0xF0;
+        public const ulong MeshObjectBonesList = 0xD0;
         public const ulong MeshObjectBonesSize = 0x18;
 
         // Animation

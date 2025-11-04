@@ -62,6 +62,15 @@ namespace MamboDMA.Games.ABI
         private static float _ctrlYawBuf;
         private static Vector3 _camBiasBuf;
 
+        // positions' active bias (the bias that ActorPositions were built with)
+        private static Vector3 _positionsBias;
+
+        // skeleton cache knobs
+        private const double SKEL_MAX_AGE_MS        = 900.0;  // keep bones visible longer to avoid pop
+        private const double SKEL_MIN_HOLD_MS       = 250.0;  // (reserved for future use)
+        private const double SKEL_FORCE_REFRESH_MS  = 500.0;  // rebuild even if LastSubmit didn't change
+        private const float  SUBMIT_EPSILON         = 0.0005f; // handle float jitter/wrap
+
         // coherent frame for ESP
         public struct Frame
         {
@@ -88,6 +97,9 @@ namespace MamboDMA.Games.ABI
             public string Name;
         }
         private static readonly Dictionary<ulong, ActorCacheEntry> _actorCache = new(1024);
+
+        // guard to avoid recomputing bones if mesh didn't submit a new pose
+        private static readonly Dictionary<ulong, float> _lastSubmitSeen = new(256);
 
         // throttles
         private static long _lastEnumTicks;
@@ -475,17 +487,18 @@ namespace MamboDMA.Games.ABI
 
                     if (actors != null && actors.Count > 0)
                     {
-                        // Snapshot camera bias for this frame
+                        // Snapshot camera bias for this positions frame
                         TryGetCameraSnapshot(out var camRaw, out var localRaw, out _, out var camBias);
                         var frameBias = camBias;
+                        _positionsBias = frameBias; // publish bias used for these positions
 
-                        // Read Root->RelativeLocation (WORLD), CTW pointer, timers/flags
-                        var relLoc = new Vector3[actors.Count];
-                        var ctwPtrs = new ulong[actors.Count];
-                        var lastSubmit = new float[actors.Count];
-                        var lastOnScr = new float[actors.Count];
-                        var deadFlag = new bool[actors.Count];
-                        var deadComp = new bool[actors.Count];
+                        // Read Root->CTW, Mesh->CTW, timers/flags
+                        var rootCtwPtrs = new ulong[actors.Count];
+                        var meshCtwPtrs = new ulong[actors.Count];
+                        var lastSubmit  = new float[actors.Count];
+                        var lastOnScr   = new float[actors.Count];
+                        var deadFlag    = new bool[actors.Count];
+                        var deadComp    = new bool[actors.Count];
 
                         using (var mapA = DmaMemory.Scatter())
                         {
@@ -495,7 +508,7 @@ namespace MamboDMA.Games.ABI
                                 var a = actors[i];
 
                                 if (a.Root != 0)
-                                    r[i].AddValueEntry<Vector3>(0, a.Root + ABIOffsets.USceneComponent_RelativeLocation);
+                                    r[i].AddValueEntry<ulong>(0, a.Root + ABIOffsets.USceneComponent_ComponentToWorld_Ptr);
 
                                 if (a.Mesh != 0)
                                 {
@@ -516,8 +529,8 @@ namespace MamboDMA.Games.ABI
 
                             for (int i = 0; i < actors.Count; i++)
                             {
-                                r[i].TryGetValue(0, out relLoc[i]);
-                                r[i].TryGetValue(1, out ctwPtrs[i]);
+                                r[i].TryGetValue(0, out rootCtwPtrs[i]);
+                                r[i].TryGetValue(1, out meshCtwPtrs[i]);
                                 r[i].TryGetValue(2, out lastSubmit[i]);
                                 r[i].TryGetValue(3, out lastOnScr[i]);
 
@@ -531,38 +544,43 @@ namespace MamboDMA.Games.ABI
                             }
                         }
 
-                        // CTW deref and bias-align
-                        var ctwValues = new FTransform[actors.Count];
+                        // Deref CTWs & bias-align
+                        var rootCtwValues = new FTransform[actors.Count];
+                        var meshCtwValues = new FTransform[actors.Count];
+
                         using (var mapB = DmaMemory.Scatter())
                         {
                             var r = mapB.AddRound(false);
                             for (int i = 0; i < actors.Count; i++)
                             {
-                                if (ctwPtrs[i] != 0)
-                                    r[i].AddValueEntry<FTransform>(0, ctwPtrs[i]);
+                                if (rootCtwPtrs[i] != 0) r[i].AddValueEntry<FTransform>(0, rootCtwPtrs[i]);
+                                if (meshCtwPtrs[i] != 0) r[i].AddValueEntry<FTransform>(1, meshCtwPtrs[i]);
                             }
                             mapB.Execute();
 
                             for (int i = 0; i < actors.Count; i++)
                             {
-                                if (ctwPtrs[i] != 0 && r[i].TryGetValue(0, out FTransform ctw))
+                                if (rootCtwPtrs[i] != 0 && r[i].TryGetValue(0, out FTransform rctw))
                                 {
-                                    if (float.IsFinite(ctw.Translation.X))
-                                        ctw.Translation += frameBias;
-                                    ctwValues[i] = ctw;
+                                    if (float.IsFinite(rctw.Translation.X)) rctw.Translation += frameBias;
+                                    rootCtwValues[i] = rctw;
                                 }
-                                else ctwValues[i] = default;
+                                if (meshCtwPtrs[i] != 0 && r[i].TryGetValue(1, out FTransform mctw))
+                                {
+                                    if (float.IsFinite(mctw.Translation.X)) mctw.Translation += frameBias;
+                                    meshCtwValues[i] = mctw;
+                                }
                             }
                         }
 
-                        // Assemble positions
+                        // Assemble positions (world space from Root CTW; bones use Mesh CTW)
                         posScratch.Clear();
                         for (int i = 0; i < actors.Count; i++)
                         {
                             var a = actors[i];
                             if (a.Root == 0) continue;
 
-                            Vector3 pos = relLoc[i] + frameBias;
+                            Vector3 pos = rootCtwValues[i].Translation;
 
                             float H = 0f, HM = 0f;
                             if (vitals != null && vitals.TryGetValue(a.Pawn, out var vt))
@@ -572,7 +590,7 @@ namespace MamboDMA.Games.ABI
 
                             posScratch.Add(new ActorPos(
                                 a.Pawn, a.Mesh, a.Root, a.DeathComp,
-                                pos, ctwValues[i],
+                                pos, meshCtwValues[i],
                                 lastSubmit[i], lastOnScr[i],
                                 H, HM,
                                 freshSkel,
@@ -581,22 +599,85 @@ namespace MamboDMA.Games.ABI
                             ));
                         }
 
-                        // Publish full frame (with current camera snapshot rebased to frameBias)
+                        // Publish full frame (rebase camera/local to this frame's bias)
                         TryGetCameraSnapshot(out var camNow, out var localNow, out _, out var camBiasNow);
-                        var camSnap = camNow; camSnap.Location = camNow.Location - camBiasNow + frameBias;
-                        var localSnap = localNow - camBiasNow + frameBias;
+                        var camSnap   = camNow;  camSnap.Location = camNow.Location - camBiasNow + frameBias;
+                        var localSnap =              localNow      - camBiasNow + frameBias;
 
                         Interlocked.Increment(ref _frameSeq);
                         _frameBuf = new Frame
                         {
-                            Cam = camSnap,
-                            Local = localSnap,
+                            Cam       = camSnap,
+                            Local     = localSnap,
                             Positions = new List<ActorPos>(posScratch),
-                            Stamp = System.Diagnostics.Stopwatch.GetTimestamp()
+                            Stamp     = System.Diagnostics.Stopwatch.GetTimestamp()
                         };
                         Interlocked.Increment(ref _frameSeq);
 
                         lock (Sync) ActorPositions = new List<ActorPos>(posScratch);
+
+                        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+                        // SAME-FRAME SKELETON WARMUP (no visibility gate)
+                        // prioritize non-bot, near local; refresh even if flickering
+                        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+                        const int WarmupK = 12;
+                        if (ActorPositions.Count > 0)
+                        {
+                            var isBotMap = new Dictionary<ulong, bool>(ActorList.Count);
+                            lock (Sync) foreach (var a in ActorList) isBotMap[a.Pawn] = a.IsBot;
+
+                            var shortlist = new List<ActorPos>(WarmupK);
+                            foreach (var ap in ActorPositions)
+                            {
+                                if (ap.Mesh == 0 || ap.IsDead) continue;
+                                // DO NOT gate on visibility (prevents pop when flickering)
+                                shortlist.Add(ap);
+                            }
+
+                            shortlist.Sort((a, b) =>
+                            {
+                                bool an = isBotMap.TryGetValue(a.Pawn, out var ia) ? !ia : true;
+                                bool bn = isBotMap.TryGetValue(b.Pawn, out var ib) ? !ib : true;
+                                int pri = bn.CompareTo(an); if (pri != 0) return pri;
+                                float da = Vector3.DistanceSquared(localSnap, a.Position);
+                                float db = Vector3.DistanceSquared(localSnap, b.Position);
+                                return da.CompareTo(db);
+                            });
+
+                            int taken = 0;
+                            foreach (var ap in shortlist)
+                            {
+                                if (taken >= WarmupK) break;
+
+                                float lastSeen = 0f;
+                                _lastSubmitSeen.TryGetValue(ap.Pawn, out lastSeen);
+
+                                // detect backwards (wrap/LOD): allow recompute
+                                if (ap.LastSubmit + SUBMIT_EPSILON < lastSeen)
+                                    _lastSubmitSeen[ap.Pawn] = ap.LastSubmit - 2 * SUBMIT_EPSILON;
+
+                                bool submitAdvanced = ap.LastSubmit > lastSeen + SUBMIT_EPSILON;
+                                bool needsStaleRefresh = true;
+                                lock (Sync)
+                                {
+                                    if (_skeletons.TryGetValue(ap.Pawn, out var v))
+                                    {
+                                        double ageMs = (System.Diagnostics.Stopwatch.GetTimestamp() - v.ts) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                                        needsStaleRefresh = ageMs >= SKEL_FORCE_REFRESH_MS;
+                                    }
+                                }
+                                if (!(submitAdvanced || needsStaleRefresh)) continue;
+
+                                var ctwLocal = ap.Ctw; // bias-aligned mesh CTW
+                                if (Skeleton.TryGetWorldBones(ap.Mesh, ap.Root, in ctwLocal, out var pts, out var dbg))
+                                {
+                                    __SetSkeletonUnsafe(ap.Pawn, pts);
+                                    Skeleton.LastDebug = dbg;
+                                    _lastSubmitSeen[ap.Pawn] = Math.Max(ap.LastSubmit, lastSeen);
+                                    taken++;
+                                }
+                            }
+                        }
                     }
                 }
                 catch { }
@@ -617,15 +698,19 @@ namespace MamboDMA.Games.ABI
                     if (currentPositions != null)
                     {
                         // latest camera snapshot
-                        TryGetCameraSnapshot(out var cam, out var local, out _, out _);
+                        TryGetCameraSnapshot(out var cam, out var local, out var ctrlYaw, out var camBias);
+
+                        // Rebase camera/local to the *same* bias the positions were built with
+                        var camRebased   = cam;   camRebased.Location = cam.Location - camBias + _positionsBias;
+                        var localRebased =          local             - camBias + _positionsBias;
 
                         Interlocked.Increment(ref _frameSeq);
                         _frameBuf = new Frame
                         {
-                            Cam = cam,
-                            Local = local,
-                            Positions = currentPositions,
-                            Stamp = System.Diagnostics.Stopwatch.GetTimestamp()
+                            Cam       = camRebased,
+                            Local     = localRebased,
+                            Positions = currentPositions, // already built with _positionsBias
+                            Stamp     = System.Diagnostics.Stopwatch.GetTimestamp()
                         };
                         Interlocked.Increment(ref _frameSeq);
                     }
@@ -662,8 +747,13 @@ namespace MamboDMA.Games.ABI
                     var posMap = new Dictionary<ulong, ActorPos>(positions.Count);
                     for (int i = 0; i < positions.Count; i++) posMap[positions[i].Pawn] = positions[i];
 
+                    // Prioritize non-bots and nearest
                     actors.Sort((a, b) =>
                     {
+                        int ra = a.IsBot ? 1 : 0;
+                        int rb = b.IsBot ? 1 : 0;
+                        int r = ra.CompareTo(rb);
+                        if (r != 0) return r;
                         posMap.TryGetValue(a.Pawn, out var pa);
                         posMap.TryGetValue(b.Pawn, out var pb);
                         float da = Vector3.DistanceSquared(local, pa.Position);
@@ -681,12 +771,32 @@ namespace MamboDMA.Games.ABI
                         if (!posMap.TryGetValue(a.Pawn, out var ap)) continue;
                         if (ap.IsDead) continue;
 
-                        // use CTW from positions (already bias-aligned)
-                        var ctwLocal = ap.Ctw;
+                        float lastSeen = 0f;
+                        _lastSubmitSeen.TryGetValue(a.Pawn, out lastSeen);
+
+                        // detect backwards (wrap/LOD): allow recompute
+                        if (ap.LastSubmit + SUBMIT_EPSILON < lastSeen)
+                            _lastSubmitSeen[a.Pawn] = ap.LastSubmit - 2 * SUBMIT_EPSILON;
+
+                        bool submitAdvanced = ap.LastSubmit > lastSeen + SUBMIT_EPSILON;
+
+                        bool needsStaleRefresh = true;
+                        lock (Sync)
+                        {
+                            if (_skeletons.TryGetValue(a.Pawn, out var v))
+                            {
+                                double ageMs = (System.Diagnostics.Stopwatch.GetTimestamp() - v.ts) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                                needsStaleRefresh = ageMs >= SKEL_FORCE_REFRESH_MS;
+                            }
+                        }
+                        if (!(submitAdvanced || needsStaleRefresh)) continue;
+
+                        var ctwLocal = ap.Ctw; // bias-aligned CTW from positions
                         if (Skeleton.TryGetWorldBones(a.Mesh, a.Root, in ctwLocal, out var pts, out var dbg))
                         {
                             lock (Sync) _skeletons[a.Pawn] = (pts, System.Diagnostics.Stopwatch.GetTimestamp());
                             Skeleton.LastDebug = dbg;
+                            _lastSubmitSeen[a.Pawn] = Math.Max(ap.LastSubmit, lastSeen);
                         }
 
                         processed++;
@@ -720,8 +830,11 @@ namespace MamboDMA.Games.ABI
 
         private static void _PruneOldSkeletons(long nowTicks)
         {
+            if (nowTicks == 0) { lock (Sync) _skeletons.Clear(); return; }
+
             long hz = System.Diagnostics.Stopwatch.Frequency;
-            long stale = (long)(0.350 * hz);
+            long maxAge  = (long)(SKEL_MAX_AGE_MS  * 0.001 * hz);
+            // long minHold = (long)(SKEL_MIN_HOLD_MS * 0.001 * hz); // reserved
 
             lock (Sync)
             {
@@ -729,14 +842,14 @@ namespace MamboDMA.Games.ABI
                 var toRemove = new List<ulong>(4);
                 foreach (var kv in _skeletons)
                 {
-                    long age = (nowTicks == 0) ? long.MaxValue : nowTicks - kv.Value.ts;
-                    if (age > stale) toRemove.Add(kv.Key);
+                    long age = nowTicks - kv.Value.ts;
+                    if (age > maxAge) toRemove.Add(kv.Key);
                 }
                 for (int i = 0; i < toRemove.Count; i++) _skeletons.Remove(toRemove[i]);
             }
         }
 
-        private static bool HasFreshSkeleton(ulong pawn, double maxAgeMs = 350.0)
+        private static bool HasFreshSkeleton(ulong pawn, double maxAgeMs = SKEL_MAX_AGE_MS)
         {
             lock (Sync)
             {
@@ -769,8 +882,8 @@ namespace MamboDMA.Games.ABI
             ulong Mesh,
             ulong Root,
             ulong DeathComp,
-            Vector3 Position,  // world + bias
-            FTransform Ctw,    // bias-aligned; for bones only
+            Vector3 Position,  // world + bias (from Root CTW)
+            FTransform Ctw,    // Mesh CTW (world + bias) for bones
             float LastSubmit,
             float LastOnScreen,
             float Health,
