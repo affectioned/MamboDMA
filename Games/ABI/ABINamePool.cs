@@ -39,11 +39,21 @@ namespace MamboDMA.Games.ABI
 
             byte key = _xorKey;
 
+            // Mirror C++:
+            // dl = ((key >> 3) & 0x04) ^ key
+            byte dl = (byte)((((byte)(key >> 3)) & 0x04) ^ key);
+
+            // v4 = (((dl & 0x04) << 3) ^ dl)
+            byte v4 = (byte)((((byte)(dl & 0x04)) << 3) ^ dl);
+
             for (int i = 0; i < nameLength; ++i)
             {
-                byte dl = (byte)(((key >> 5) & 0x02) ^ key);
-                byte cl = (byte)((((byte)(dl & 0x02) << 5)) ^ dl);
-                byte al = (byte)((((cl >> 5) & 0x02) ^ input[i] ^ cl) ^ 0x39);
+                // al = ((v4 >> 3) & 0x04) ^ input[i] ^ v4 ^ 0x78
+                byte al = v4;
+                al = (byte)(((byte)(al >> 3)) & 0x04);
+                al ^= input[i];
+                al ^= v4;
+                al ^= 0x78;
                 input[i] = al;
             }
         }

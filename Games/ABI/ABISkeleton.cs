@@ -6,7 +6,7 @@ namespace MamboDMA.Games.ABI
 {
     internal static class Skeleton
     {
-        // indices
+        // raw mesh indices (component-space fetch list)
         private const int Pelvis = 1;
         private const int Spine_01 = 12, Spine_02 = 13, Spine_03 = 14, Neck = 15, Head = 16;
         private const int Thigh_L = 2, Calf_L = 4, Foot_L = 5;
@@ -14,6 +14,7 @@ namespace MamboDMA.Games.ABI
         private const int Clavicle_L = 50, UpperArm_L = 51, LowerArm_L = 52, Hand_L = 54;
         private const int Clavicle_R = 20, UpperArm_R = 21, LowerArm_R = 22, Hand_R = 24;
 
+        // order we fetch & expose
         private static readonly int[] _fetch = new int[]
         {
             Pelvis, Spine_01, Spine_02, Spine_03, Neck, Head,
@@ -22,6 +23,7 @@ namespace MamboDMA.Games.ABI
             Thigh_L, Calf_L, Foot_L, Thigh_R, Calf_R, Foot_R
         };
 
+        // public indices into the worldPoints[] we return
         public const int IDX_Pelvis = 0;
         public const int IDX_Spine_01 = 1;
         public const int IDX_Spine_02 = 2;
@@ -91,7 +93,7 @@ namespace MamboDMA.Games.ABI
 
                 using var map2 = DmaMemory.Scatter();
                 var r2 = map2.AddRound(false);
-                const int SZ = 0x30;
+                const int SZ = 0x30; // sizeof(FTransform)
                 for (int i = 0; i < _fetch.Length; i++)
                     r2[i].AddValueEntry<FTransform>(0, data + (ulong)(_fetch[i] * SZ));
                 map2.Execute();
@@ -108,6 +110,8 @@ namespace MamboDMA.Games.ABI
                     if (!r2[i].TryGetValue(0, out FTransform boneCS))
                     { dbg.Note = "Bone read failed"; return false; }
 
+                    // component-space -> world: use the bone's translation in component space,
+                    // then apply ComponentToWorld
                     var ws = ABIMath.TransformPosition(ctw, boneCS.Translation);
                     worldPoints[i] = ws;
 
@@ -120,17 +124,25 @@ namespace MamboDMA.Games.ABI
                 }
 
                 dbg.Note = "ok";
+                LastDebug = dbg;
                 return true;
             }
             catch (Exception ex) { dbg.Note = $"Exception: {ex.Message}"; return false; }
         }
 
+        // Backward-compat overload (no zoom)
         public static void Draw(ImGuiNET.ImDrawListPtr list, Vector3[] wp, FMinimalViewInfo cam, float w, float h, uint color)
+            => Draw(list, wp, cam, w, h, color, 1f);
+
+        // Zoom-aware draw (use this from ESP): pass zoom >= 1 when scoped
+        public static void Draw(ImGuiNET.ImDrawListPtr list, Vector3[] wp, FMinimalViewInfo cam, float w, float h, uint color, float zoom)
         {
+            zoom = MathF.Max(1f, float.IsFinite(zoom) ? zoom : 1f);
+
             void seg(int a, int b)
             {
-                if (ABIMath.WorldToScreen(wp[a], cam, w, h, out var A) &&
-                    ABIMath.WorldToScreen(wp[b], cam, w, h, out var B))
+                if (ABIMath.WorldToScreen(wp[a], cam, w, h, zoom, out var A) &&
+                    ABIMath.WorldToScreen(wp[b], cam, w, h, zoom, out var B))
                 {
                     list.AddLine(A, B, color, 1.5f);
                 }

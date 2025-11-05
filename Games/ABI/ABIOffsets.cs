@@ -3,9 +3,9 @@ namespace MamboDMA.Games.ABI
     // Bone/mesh offsets + core engine pointers
     public static class ABIOffsets
     {
-        public const ulong GWorld    = 0xAB9A098;
-        public const ulong GNames    = 0xB012000;
-        public const ulong DecryuptKey = 0xB011C48;
+        public const ulong GWorld    = 0xAB9F1A8;
+        public const ulong GNames    = 0xB017140;
+        public const ulong DecryuptKey = 0xB016D88;
 
         public const ulong UWorld_OwningGameInstance = 0x180;
         public const ulong UWorld_GameState          = 0x120;

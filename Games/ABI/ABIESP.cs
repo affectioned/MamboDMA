@@ -14,7 +14,9 @@ namespace MamboDMA.Games.ABI
             Vector4 colorPlayer, Vector4 colorBot,
             Vector4 colorBoxVisible, Vector4 colorBoxInvisible,
             Vector4 colorSkelVisible, Vector4 colorSkelInvisible,
-            Vector4 deadFill, Vector4 deadOutline)
+            Vector4 deadFill, Vector4 deadOutline,
+            float zoomEff // <= pass MathF.Max(1f, Players.Zoom)
+        )
         {
             if (!Players.TryGetFrame(out var fr)) return;
             var cam   = fr.Cam;
@@ -37,6 +39,10 @@ namespace MamboDMA.Games.ABI
             var io = ImGui.GetIO();
             float scrW = io.DisplaySize.X, scrH = io.DisplaySize.Y;
 
+            // Local helper uses the zoom-aware W2S
+            bool W2S(in Vector3 ws, out Vector2 sp) =>
+                ABIMath.WorldToScreen(ws, cam, scrW, scrH, MathF.Max(zoomEff, 1f), out sp);
+
             for (int i = 0; i < actors.Count; i++)
             {
                 if (!posMap.TryGetValue(actors[i].Pawn, out var ap)) continue;
@@ -45,7 +51,7 @@ namespace MamboDMA.Games.ABI
                 float distM  = distCm / 100f;
                 if (distM > maxDistMeters) continue;
 
-                if (!ABIMath.WorldToScreen(ap.Position, cam, scrW, scrH, out var screen)) continue;
+                if (!W2S(ap.Position, out var screen)) continue;
 
                 if (ap.IsDead)
                 {
@@ -74,8 +80,8 @@ namespace MamboDMA.Games.ABI
                     var feetWS = new Vector3((footL.X + footR.X) * 0.5f, (footL.Y + footR.Y) * 0.5f, (footL.Z + footR.Z) * 0.5f);
 
                     Vector2? head2D = null, feet2D = null;
-                    if (ABIMath.WorldToScreen(headWS, cam, scrW, scrH, out var headScr)) head2D = headScr;
-                    if (ABIMath.WorldToScreen(feetWS, cam, scrW, scrH, out var feetScr)) feet2D = feetScr;
+                    if (W2S(headWS, out var headScr)) head2D = headScr;
+                    if (W2S(feetWS, out var feetScr)) feet2D = feetScr;
 
                     if (head2D.HasValue && feet2D.HasValue)
                     {
@@ -102,7 +108,10 @@ namespace MamboDMA.Games.ABI
                         DrawHealthBar(list, new Vector2(min2.X, min2.Y - 8f), max2.X - min2.X, ap.Health, ap.HealthMax);
 
                     if (drawSkeletons && distM <= maxSkelDistMeters)
-                        Skeleton.Draw(list, bones, cam, scrW, scrH, clrSkel);
+                    {
+                        // Ensure your Skeleton.Draw accepts (zoom) and uses zoom-aware W2S
+                        Skeleton.Draw(list, bones, cam, scrW, scrH, clrSkel, MathF.Max(zoomEff, 1f));
+                    }
                 }
                 else
                 {

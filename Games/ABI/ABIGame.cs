@@ -1,4 +1,3 @@
-// MamboDMA/Games/ABI/ABIGame.cs
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -18,15 +17,13 @@ namespace MamboDMA.Games.ABI
         public string Name => "ArenaBreakoutInfinite";
         private bool _initialized, _running;
 
-        // Config shortcut
         private static ABIGameConfig Cfg => Config<ABIGameConfig>.Settings;
 
-        // Local state for Input Manager & Makcu (ABI panel)
         private static int _selectedInputIndex = -1;
         private static List<Device.SerialDeviceInfo> _inputDevices = new();
         private static bool _inputInitialized = false;
 
-        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ aimbot helpers ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤ aimbot helpers ©¤©¤©¤©¤©¤©¤©¤©¤©¤
         private static readonly string[] _boneNames = new[]
         {
             "Pelvis","Spine_01","Spine_02","Spine_03","Neck","Head",
@@ -49,6 +46,7 @@ namespace MamboDMA.Games.ABI
             Skeleton.IDX_UpperArm_R, Skeleton.IDX_UpperArm_L,
             Skeleton.IDX_Thigh_R, Skeleton.IDX_Thigh_L
         };
+
         public enum AimbotTargetMode : int
         {
             ClosestWorldDistanceInFov = 0,
@@ -56,14 +54,13 @@ namespace MamboDMA.Games.ABI
         }
         private static readonly System.Random _rng = new();
 
-        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ aimbot viz state ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
-        private static Vector2? _lastAimScreen;      // last screen-space aim point
-        private static long     _lastAimStampTicks;  // Stopwatch ticks of last aim point
+        // aimbot viz state
+        private static Vector2? _lastAimScreen;
+        private static long     _lastAimStampTicks;
         private static uint U32(Vector4 col) => ImGui.ColorConvertFloat4ToU32(col);
         private static long NowTicks() => Stopwatch.GetTimestamp();
         private static double TicksToMs(long dtTicks) => dtTicks * 1000.0 / Stopwatch.Frequency;
 
-        // ABI action names (exposed to Keybinds UI for Category = "ABI")
         private static readonly string[] AbiActions =
         {
             "ABI_ToggleThreads",
@@ -86,10 +83,7 @@ namespace MamboDMA.Games.ABI
             if (ScreenService.Current.W <= 0 || ScreenService.Current.H <= 0)
                 ScreenService.UpdateFromMonitor(GameSelector.SelectedMonitor);
 
-            // Register ABI actions so the Keybinds panel can list & dispatch them.
             Keybinds.RegisterCategory("ABI", AbiActions, HandleAbiAction);
-
-            // Ensure a default ABI keybind profile exists.
             EnsureAbiKeybindProfile();
 
             _initialized = true;
@@ -132,7 +126,11 @@ namespace MamboDMA.Games.ABI
 
         public void Draw(ImGuiWindowFlags flags)
         {
-            // Overlay-only branch (menus hidden)
+            // compute effective zoom once per frame
+            float zoomEff = 1f;
+            if (Players.TryGetZoom(out var zinfo) && zinfo.Valid)
+                zoomEff = MathF.Max(1f, zinfo.Zoom);
+
             if (UiVisibility.MenusHidden)
             {
                 if (_running && Players.ActorList.Count > 0)
@@ -144,12 +142,11 @@ namespace MamboDMA.Games.ABI
                         Cfg.ColorPlayer, Cfg.ColorBot,
                         Cfg.ColorBoxVisible, Cfg.ColorBoxInvisible,
                         Cfg.ColorSkelVisible, Cfg.ColorSkelInvisible,
-                        Cfg.DeadFill, Cfg.DeadOutline);
+                        Cfg.DeadFill, Cfg.DeadOutline,
+                        zoomEff);
                 }
-
-                // FOV circle + aimline when aimbot enabled
                 DrawAimbotOverlay();
-                return; // IMPORTANT: don't open any ImGui windows
+                return;
             }
 
             Config<ABIGameConfig>.DrawConfigPanel(Name, cfg =>
@@ -157,7 +154,6 @@ namespace MamboDMA.Games.ABI
                 bool vmmReady = DmaMemory.IsVmmReady;
                 bool attached = DmaMemory.IsAttached;
 
-                // Status chip
                 var statusCol = (attached && _running) ? new Vector4(0, 0.8f, 0, 1) :
                                 attached ? new Vector4(0.85f, 0.75f, 0.15f, 1) :
                                            new Vector4(1, 0.3f, 0.2f, 1);
@@ -167,11 +163,9 @@ namespace MamboDMA.Games.ABI
 
                 ImGui.Separator();
 
-                // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
-                // Tabs inside the ABI panel
                 if (ImGui.BeginTabBar("ABI_Tabs", ImGuiTabBarFlags.NoCloseWithMiddleMouseButton))
                 {
-                    // ©¤©¤ MAIN TAB ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+                    // MAIN
                     if (ImGui.BeginTabItem("Main"))
                     {
                         ImGui.TextDisabled("VMM & Attach");
@@ -195,7 +189,6 @@ namespace MamboDMA.Games.ABI
 
                         ImGui.Separator();
 
-                        // Start/Stop worker threads
                         if (!attached) ImGui.BeginDisabled();
                         if (ImGui.Button(_running ? "Stop Threads" : "Start Threads"))
                         { if (_running) Stop(); else Start(); }
@@ -207,7 +200,7 @@ namespace MamboDMA.Games.ABI
                         ImGui.EndTabItem();
                     }
 
-                    // ©¤©¤ ESP TAB ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+                    // ESP
                     if (ImGui.BeginTabItem("ESP"))
                     {
                         if (ImGui.CollapsingHeader("Basics", ImGuiTreeNodeFlags.DefaultOpen))
@@ -232,14 +225,14 @@ namespace MamboDMA.Games.ABI
                         ImGui.EndTabItem();
                     }
 
-                    // ©¤©¤ WEBRADAR TAB ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+                    // WEBRADAR
                     if (ImGui.BeginTabItem("WebRadar"))
                     {
                         WebRadarUI.DrawPanel();
                         ImGui.EndTabItem();
                     }
 
-                    // ©¤©¤ COLORS TAB ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+                    // COLORS
                     if (ImGui.BeginTabItem("Colors"))
                     {
                         ImGui.Text("ESP Colors");
@@ -261,7 +254,7 @@ namespace MamboDMA.Games.ABI
                         ImGui.EndTabItem();
                     }
 
-                    // ©¤©¤ AIMBOT TAB ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+                    // AIMBOT
                     if (ImGui.BeginTabItem("Aimbot"))
                     {
                         ImGui.TextDisabled("Simple Makcu aimbot (hold key/button to run)");
@@ -277,7 +270,6 @@ namespace MamboDMA.Games.ABI
 
                         ImGui.Separator();
 
-                        // Target bone
                         int selBone = Array.IndexOf(_boneIndices, cfg.AimbotTargetBone);
                         if (selBone < 0) selBone = Array.IndexOf(_boneIndices, Skeleton.IDX_Head);
                         if (ImGui.BeginCombo("Target Bone", _boneNames[Math.Clamp(selBone, 0, _boneNames.Length - 1)]))
@@ -296,7 +288,7 @@ namespace MamboDMA.Games.ABI
                         }
 
                         ImGui.Checkbox("Random Bone", ref cfg.AimbotRandomBone);
-                        // Target selection mode
+
                         string[] tgtModes = new[]
                         {
                             "Closest by distance (within FOV)",
@@ -334,12 +326,12 @@ namespace MamboDMA.Games.ABI
                         {
                             0x02, /* RButton */
                             0x01, /* LButton */
-                            0x12, /* Alt (MENU) */
+                            0x12, /* Alt */
                             0x10, /* Shift */
                             0x11, /* Ctrl */
-                            0x05, /* XBUTTON1 (Mouse4) */
-                            0x06, /* XBUTTON2 (Mouse5) */
-                            0x14, /* CapsLock */
+                            0x05, /* Mouse4 */
+                            0x06, /* Mouse5 */
+                            0x14, /* Caps */
                             0x56, /* V */
                             0x46, /* F */
                             0x51, /* Q */
@@ -411,12 +403,36 @@ namespace MamboDMA.Games.ABI
                     ImGui.Text($"LocalPos: {Players.LocalPosition}");
                     ImGui.Text($"CtrlYaw: {Players.CtrlYaw:F1}");
 
+                    // ©¤©¤ Weapon Zoom Debug ©¤©¤
+                    if (Players.TryGetZoom(out var zi) && zi.Valid)
+                    {
+                        ImGui.Separator();
+                        ImGui.Text("Weapon Zoom Debug");
+                        ImGui.Text($"WeaponMan: 0x{zi.WeaponMan:X}");
+                        ImGui.Text($"CurrentWeapon: 0x{zi.CurrentWeapon:X}");
+                        ImGui.Text($"ZoomComp: 0x{zi.ZoomComp:X}");
+                        ImGui.Text($"ScopeMagnification: {zi.ScopeMag:F2}x");
+                        ImGui.Text($"ZoomProgress: {zi.Progress:P0}");
+                        ImGui.Text($"Effective Zoom: {zi.Zoom:F2}x");
+                    }
+                    else
+                    {
+                        ImGui.Separator();
+                        ImGui.Text("Weapon Zoom Debug");
+                        ImGui.TextDisabled(ABIOffsetsExt.OFF_PAWN_WEAPONMAN == 0
+                            ? "OFF_PAWN_WEAPONMAN = 0 (fill this offset to enable zoom read)"
+                            : "Zoom not available (component/weapon/zoomcomp null)");
+                    }
+
                     DrawPlayersDebugWindow();
                 }
 
-                // Overlays also while panel is open
                 if (_running && Players.ActorList.Count > 0)
                 {
+                    // Recompute zoom here too (UI can be open)
+                    float zf = 1f;
+                    if (Players.TryGetZoom(out var zi2) && zi2.Valid) zf = MathF.Max(1f, zi2.Zoom);
+
                     ABIESP.Render(
                         Cfg.DrawBoxes, Cfg.DrawNames, Cfg.DrawDistance, Cfg.DrawSkeletons,
                         Cfg.DrawDeathMarkers, Cfg.DeathMarkerMaxDist, Cfg.DeathMarkerBaseSize,
@@ -424,10 +440,10 @@ namespace MamboDMA.Games.ABI
                         Cfg.ColorPlayer, Cfg.ColorBot,
                         Cfg.ColorBoxVisible, Cfg.ColorBoxInvisible,
                         Cfg.ColorSkelVisible, Cfg.ColorSkelInvisible,
-                        Cfg.DeadFill, Cfg.DeadOutline);
+                        Cfg.DeadFill, Cfg.DeadOutline,
+                        zf);
                 }
 
-                // FOV circle + aimline
                 DrawAimbotOverlay();
             });
         }
@@ -438,7 +454,6 @@ namespace MamboDMA.Games.ABI
             var cfg = Cfg;
             if (!cfg.AimbotEnabled) return;
 
-            // Trigger priority: InputManager > Makcu
             bool keyHeld = false;
             bool makcuHeld = false;
 
@@ -459,31 +474,26 @@ namespace MamboDMA.Games.ABI
             if (!Players.TryGetFrame(out var fr)) return;
             if (fr.Positions == null || fr.Positions.Count == 0) return;
 
-            // Choose best target
             var best = FindBestTarget(fr, cfg, cfg.AimbotTargetMode, out _, out Vector2 aimScreen);
             if (!best.HasValue) return;
 
             float W = ScreenService.Current.W;
             float H = ScreenService.Current.H;
             var center = new Vector2(W * 0.5f, H * 0.5f);
-            var delta = aimScreen - center; // already within FOV by selector
+            var delta = aimScreen - center;
 
-            // Deadzone
             if (MathF.Abs(delta.X) < cfg.AimbotDeadzonePx && MathF.Abs(delta.Y) < cfg.AimbotDeadzonePx)
                 return;
 
-            // Save target point for overlay
             _lastAimScreen     = aimScreen;
             _lastAimStampTicks = NowTicks();
 
-            // Pixel power hard clamp (<= 0.20)
             float power = Math.Clamp(cfg.AimbotPixelPower, 0.01f, 0.20f);
             int moveX = (int)MathF.Round(delta.X * power);
             int moveY = (int)MathF.Round(delta.Y * power);
 
             if (Device.connected)
             {
-                // Only Device.move ¡ª move_smooth is unstable
                 Device.move(moveX, moveY);
             }
         }
@@ -506,8 +516,12 @@ namespace MamboDMA.Games.ABI
             var center = new Vector2(W * 0.5f, H * 0.5f);
             float maxFov = Math.Max(16f, cfg.AimbotFovPx);
 
+            // Zoom from weapon (optional)
+            float zoom = 1f;
+            if (Players.TryGetZoom(out var zi) && zi.Valid) zoom = MathF.Max(1f, zi.Zoom);
+
             Players.ActorPos? best = null;
-            float bestMetric = float.MaxValue; // metric depends on mode
+            float bestMetric = float.MaxValue;
 
             for (int i = 0; i < posList.Count; i++)
             {
@@ -516,7 +530,6 @@ namespace MamboDMA.Games.ABI
 
                 if (cfg.AimbotRequireVisible && !ap.IsVisible) continue;
 
-                // Identify AI vs PMC from current ActorList (unchanged)
                 bool? isBot = null;
                 lock (Players.Sync)
                 {
@@ -538,7 +551,6 @@ namespace MamboDMA.Games.ABI
 
                 if (distM > cfg.AimbotMaxMeters) continue;
 
-                // Select bone as before
                 int targetBone = SelectBone(cfg, isBot == true);
                 if (!TryGetBoneWorld(ap, targetBone, out var hitWorld))
                 {
@@ -546,10 +558,10 @@ namespace MamboDMA.Games.ABI
                         hitWorld = ap.Position;
                 }
 
-                if (!ABIMath.WorldToScreen(hitWorld, fr.Cam, W, H, out var pt))
+                // Zoom-aware projection
+                if (!ABIMath.WorldToScreenZoom(hitWorld, fr.Cam, W, H, zoom, out var pt))
                     continue;
 
-                // FOV gate here (so we only consider candidates inside FOV)
                 float pixelDist = Vector2.Distance(center, pt);
                 if (pixelDist > maxFov) continue;
 
@@ -598,7 +610,7 @@ namespace MamboDMA.Games.ABI
             return false;
         }
 
-        // ---------- Aimbot overlay (FOV circle + aim line) ----------
+        // ---------- Aimbot overlay (FOV circle + zoom-debug ring + aim line) ----------
         private static void DrawAimbotOverlay()
         {
             var cfg = Cfg;
@@ -610,11 +622,25 @@ namespace MamboDMA.Games.ABI
 
             var dl = ImGui.GetBackgroundDrawList();
 
-            // FOV circle
+            // Base FOV circle
             float r = Math.Max(4f, cfg.AimbotFovPx);
             const float fovThickness = 1.6f;
             uint fovCol = U32(new Vector4(1f, 1f, 1f, 0.33f));
             dl.AddCircle(center, r, fovCol, 64, fovThickness);
+
+            // Zoom-debug: show how the effective FOV shrinks when scoped
+            if (Cfg.ShowDebug && Players.TryGetZoom(out var zi) && zi.Valid && zi.Zoom > 1.01f)
+            {
+                float rz = r / MathF.Max(1f, zi.Zoom);
+                uint zCol = U32(new Vector4(0.2f, 0.9f, 0.9f, 0.85f));
+                dl.AddCircle(center, rz, zCol, 64, 1.8f);
+
+                // small label near center
+                var label = $"Zoom {zi.Zoom:F2}x (Scope {zi.ScopeMag:F1}x ¡¤ {zi.Progress:P0})";
+                var size = ImGui.CalcTextSize(label);
+                var at = new Vector2(center.X - size.X * 0.5f, center.Y + r + 6f);
+                dl.AddText(at, U32(new Vector4(0.9f, 0.9f, 0.9f, 0.95f)), label);
+            }
 
             // Aim line to recent target
             const double maxAgeMs = 350.0;
@@ -783,7 +809,6 @@ namespace MamboDMA.Games.ABI
 
         private static void EnsureAbiKeybindProfile()
         {
-            // Configs/ABI/abi.keybinds.json
             var root = Path.Combine(AppContext.BaseDirectory, "Configs", "ABI");
             var path = Path.Combine(root, "abi.keybinds.json");
             if (File.Exists(path)) return;

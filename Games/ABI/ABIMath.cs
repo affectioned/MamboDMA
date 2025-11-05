@@ -1,4 +1,3 @@
-// MamboDMA/Games/ABI/ABIMath.cs
 using System;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -52,8 +51,19 @@ namespace MamboDMA.Games.ABI
             };
         }
 
+        // Legacy convenience
         public static bool WorldToScreen(Vector3 pos, FMinimalViewInfo cam, float w, float h, out Vector2 s)
+            => WorldToScreen(pos, cam, w, h, 1f, out s);
+
+        // Back-compat shim with your existing name
+        public static bool WorldToScreenZoom(Vector3 pos, FMinimalViewInfo cam, float w, float h, float zoom, out Vector2 s)
+            => WorldToScreen(pos, cam, w, h, zoom, out s);
+
+        // Zoom-aware projection (primary)
+        public static bool WorldToScreen(Vector3 pos, FMinimalViewInfo cam, float w, float h, float zoom, out Vector2 s)
         {
+            if (zoom <= 0f || !float.IsFinite(zoom)) zoom = 1f;
+
             var rot = new Vector3(cam.Rotation.Pitch, cam.Rotation.Yaw, cam.Rotation.Roll);
             var m = RotationMatrix(rot);
 
@@ -63,6 +73,7 @@ namespace MamboDMA.Games.ABI
 
             Vector3 delta = pos - cam.Location;
 
+            // UE-style basis swap
             Vector3 t = new(
                 Vector3.Dot(delta, axisY),
                 Vector3.Dot(delta, axisZ),
@@ -72,11 +83,19 @@ namespace MamboDMA.Games.ABI
             if (t.Z < 1f) { s = default; return false; }
 
             float cx = w * 0.5f, cy = h * 0.5f;
-            float fovRad = cam.Fov * (MathF.PI / 180f);
-            float focal = cx / MathF.Tan(fovRad * 0.5f);
+
+            // aspect handling similar to your C++
+            float ratio = w / h;
+            if (ratio < (4f / 3f)) ratio = 4f / 3f;
+
+            float fovTan = MathF.Tan(cam.Fov * (MathF.PI / 360f));
+            float fovScaled = (ratio / (16f / 9f)) * fovTan;
+
+            float focal = cx / (fovScaled / zoom);
 
             s.X = cx + t.X * focal / t.Z;
             s.Y = cy - t.Y * focal / t.Z;
+
             return (s.X >= 0 && s.Y >= 0 && s.X <= w && s.Y <= h);
         }
 

@@ -10,6 +10,7 @@ namespace MamboDMA.Games.ABI
 {
     internal static class ABIOffsetsExt
     {
+        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤ Existing ©¤©¤©¤©¤©¤©¤©¤©¤©¤
         public const int OFF_PAWN_ASC            = 0x15E0;
         public const int OFF_PAWN_DEATHCOMP      = 0x1728;
         public const int OFF_ASC_ATTRSETS        = 0x0188;
@@ -17,15 +18,21 @@ namespace MamboDMA.Games.ABI
         public const int OFF_ATTR_HEALTHMAX      = 0x4C;
         public const int OFF_DEATHCOMP_DEATHINFO = 0x0240;
 
-        // visibility timestamps (optional)
         public const ulong OFF_MESH_TIMERS = 0x3D8;
         public const int   OFF_LASTSUBMIT  = 0x4;
         public const int   OFF_LASTONSCREEN= 0xC;
 
-        // optional
         public const int OFF_CHAR_TICKING_ON_DEATH = 0x16B0;
 
         public const float VIS_TICK = 0.06f;
+
+        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤ New (Weapon Zoom path) ©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        // TODO: fill the pawn¡úweapon manager offset for USGCharacterWeaponManagerComponent
+        public const int OFF_PAWN_WEAPONMAN      = 0x1878; // ¡û SET ME (0 disables reading)
+        public const ulong OFF_WEAPON_CURRENT    = 0x158;  // USGCharacterWeaponManagerComponent->CurrentWeapon (ASGInventory*)
+        public const ulong OFF_WEAPON_ZOOMCOMP   = 0xB00;  // ASGWeapon->WeaponZoomComp (USGWeaponZoomComponent*)
+        public const ulong OFF_ZOOM_PROGRESSRATE = 0x404;  // USGWeaponZoomComponent->ZoomProgressRate (float)
+        public const ulong OFF_ZOOM_SCOPEMAG     = 0x578;  // USGWeaponZoomComponent->ScopeMagnification (float)
     }
 
     public static class Players
@@ -41,7 +48,7 @@ namespace MamboDMA.Games.ABI
         public static FMinimalViewInfo Camera;   // for W2S
         public static float CtrlYaw;             // from APlayerController::ControlRotation
 
-        // origin bias (kept but ABI usually doesn¡¯t shift origin)
+        // origin bias
         private static Vector3 _originBias;
         private static Vector3 _prevLocalWorld;
         private static bool _havePrevLocal;
@@ -62,14 +69,13 @@ namespace MamboDMA.Games.ABI
         private static float _ctrlYawBuf;
         private static Vector3 _camBiasBuf;
 
-        // positions' active bias (the bias that ActorPositions were built with)
+        // positions' active bias
         private static Vector3 _positionsBias;
 
         // skeleton cache knobs
-        private const double SKEL_MAX_AGE_MS        = 900.0;  // keep bones visible longer to avoid pop
-        private const double SKEL_MIN_HOLD_MS       = 250.0;  // (reserved for future use)
-        private const double SKEL_FORCE_REFRESH_MS  = 500.0;  // rebuild even if LastSubmit didn't change
-        private const float  SUBMIT_EPSILON         = 0.0005f; // handle float jitter/wrap
+        private const double SKEL_MAX_AGE_MS        = 900.0;
+        private const double SKEL_FORCE_REFRESH_MS  = 500.0;
+        private const float  SUBMIT_EPSILON         = 0.0005f;
 
         // coherent frame for ESP
         public struct Frame
@@ -98,12 +104,33 @@ namespace MamboDMA.Games.ABI
         }
         private static readonly Dictionary<ulong, ActorCacheEntry> _actorCache = new(1024);
 
-        // guard to avoid recomputing bones if mesh didn't submit a new pose
+        // guard for bone recompute
         private static readonly Dictionary<ulong, float> _lastSubmitSeen = new(256);
 
         // throttles
         private static long _lastEnumTicks;
         private const int ENUM_PERIOD_MS = 150;
+
+        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤ Weapon Zoom snapshot ©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        public struct ZoomInfo
+        {
+            public bool  Valid;
+            public float Zoom;          // effective zoom (1..N)
+            public float ScopeMag;      // scope base magnification
+            public float Progress;      // 0..1
+            public ulong WeaponMan;     // component ptr
+            public ulong CurrentWeapon;
+            public ulong ZoomComp;
+            public long  Stamp;
+        }
+
+        private static readonly object _zoomSync = new();
+        private static ZoomInfo _zoom;
+
+        public static bool TryGetZoom(out ZoomInfo zi)
+        {
+            lock (_zoomSync) { zi = _zoom; return zi.Valid; }
+        }
 
         // API
         public static void StartCache()
@@ -118,6 +145,7 @@ namespace MamboDMA.Games.ABI
             new Thread(CachePositionsLoop) { IsBackground = true, Priority = ThreadPriority.Highest,     Name = "ABI.Positions" }.Start();
             new Thread(CacheSkeletonsLoop) { IsBackground = true, Priority = ThreadPriority.AboveNormal, Name = "ABI.Skeletons" }.Start();
             new Thread(FramePulseLoop)     { IsBackground = true, Priority = ThreadPriority.Highest,     Name = "ABI.FramePulse"}.Start();
+            new Thread(CacheWeaponZoomLoop){ IsBackground = true, Priority = ThreadPriority.AboveNormal, Name = "ABI.Weapon"    }.Start();
         }
 
         public static void Stop() => _running = false;
@@ -153,7 +181,7 @@ namespace MamboDMA.Games.ABI
             _skeletons[pawn] = (pts, System.Diagnostics.Stopwatch.GetTimestamp());
         }
 
-        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ loops ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤ loops ©¤©¤©¤©¤©¤©¤©¤©¤©¤
         private static void CacheWorldLoop()
         {
             while (_running) { try { CacheWorld(); } catch { } HighResDelay(50); }
@@ -198,21 +226,14 @@ namespace MamboDMA.Games.ABI
                             ? ABIOffsets.APlayerCameraManager_LastFrameCameraCachePrivate
                             : ABIOffsets.APlayerCameraManager_CameraCachePrivate;
 
-                        // camera cache
                         r[0].AddValueEntry<FMinimalViewInfo>(0, LocalCameraMgr + camCache + 0x10);
-
-                        // NOTE: for local position use Root->RelativeLocation (ABI world pos)
                         r[0].AddValueEntry<Vector3>(1, LocalRoot + ABIOffsets.USceneComponent_RelativeLocation);
-
-                        // control yaw
                         r[0].AddValueEntry<Rotator>(2, PlayerController + ABIOffsets.AController_ControlRotation);
-
                         map.Execute();
 
                         if (r[0].TryGetValue(0, out FMinimalViewInfo cam) &&
                             r[0].TryGetValue(1, out Vector3 localWorld))
                         {
-                            // origin jump guard
                             if (_havePrevLocal)
                             {
                                 var jump = _prevLocalWorld - localWorld;
@@ -230,7 +251,7 @@ namespace MamboDMA.Games.ABI
                             _camBuf      = cam;
                             _camLocalBuf = localBiased;
                             _ctrlYawBuf  = ctrlYaw;
-                            _camBiasBuf  = _originBias; // capture
+                            _camBiasBuf  = _originBias;
                             Camera       = cam;
                             LocalPosition= localBiased;
                             CtrlYaw      = ctrlYaw;
@@ -239,7 +260,7 @@ namespace MamboDMA.Games.ABI
                     }
                 }
                 catch { }
-                HighResDelay(1); // micro-loop keeps camera fresh
+                HighResDelay(1);
             }
         }
 
@@ -285,7 +306,7 @@ namespace MamboDMA.Games.ABI
                         }
                     }
 
-                    // resolve sticky ptrs (Mesh/Root/ASC/DeathComp) for those missing
+                    // resolve sticky ptrs
                     if (tmp.Count > 0)
                     {
                         using var map2 = DmaMemory.Scatter();
@@ -325,7 +346,6 @@ namespace MamboDMA.Games.ABI
                             }
                         }
 
-                        // write back sticky values into list
                         for (int i = 0; i < tmp.Count; i++)
                         {
                             var t = tmp[i];
@@ -369,8 +389,8 @@ namespace MamboDMA.Games.ABI
                         {
                             int i = needHS[k];
                             ulong basePtr = actors[i].ASC + (ulong)ABIOffsetsExt.OFF_ASC_ATTRSETS;
-                            rd[k].AddValueEntry<ulong>(0, basePtr + 0x0); // Data
-                            rd[k].AddValueEntry<int>(1,  basePtr + 0x8); // Num
+                            rd[k].AddValueEntry<ulong>(0, basePtr + 0x0);
+                            rd[k].AddValueEntry<int>(1,  basePtr + 0x8);
                         }
                         map.Execute();
 
@@ -453,7 +473,6 @@ namespace MamboDMA.Games.ABI
                         var pawn = actors[hsList[k].idx].Pawn;
                         vitals[pawn] = (h, hm);
                     }
-                    // stash into ActorPositions merge step (we merge in positions loop)
                     lock (_pendingVitalsSync) _pendingVitals = vitals;
                 }
                 catch { }
@@ -487,12 +506,12 @@ namespace MamboDMA.Games.ABI
 
                     if (actors != null && actors.Count > 0)
                     {
-                        // Snapshot camera bias for this positions frame
+                        // Snapshot bias used for this positions frame
                         TryGetCameraSnapshot(out var camRaw, out var localRaw, out _, out var camBias);
                         var frameBias = camBias;
-                        _positionsBias = frameBias; // publish bias used for these positions
+                        _positionsBias = frameBias;
 
-                        // Read Root->CTW, Mesh->CTW, timers/flags
+                        // Read CTWs, timers, flags
                         var rootCtwPtrs = new ulong[actors.Count];
                         var meshCtwPtrs = new ulong[actors.Count];
                         var lastSubmit  = new float[actors.Count];
@@ -573,7 +592,7 @@ namespace MamboDMA.Games.ABI
                             }
                         }
 
-                        // Assemble positions (world space from Root CTW; bones use Mesh CTW)
+                        // Assemble positions
                         posScratch.Clear();
                         for (int i = 0; i < actors.Count; i++)
                         {
@@ -616,10 +635,7 @@ namespace MamboDMA.Games.ABI
 
                         lock (Sync) ActorPositions = new List<ActorPos>(posScratch);
 
-                        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
-                        // SAME-FRAME SKELETON WARMUP (no visibility gate)
-                        // prioritize non-bot, near local; refresh even if flickering
-                        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+                        // SAME-FRAME SKELETON WARMUP (no vis gate; handles flicker)
                         const int WarmupK = 12;
                         if (ActorPositions.Count > 0)
                         {
@@ -630,7 +646,6 @@ namespace MamboDMA.Games.ABI
                             foreach (var ap in ActorPositions)
                             {
                                 if (ap.Mesh == 0 || ap.IsDead) continue;
-                                // DO NOT gate on visibility (prevents pop when flickering)
                                 shortlist.Add(ap);
                             }
 
@@ -657,6 +672,7 @@ namespace MamboDMA.Games.ABI
                                     _lastSubmitSeen[ap.Pawn] = ap.LastSubmit - 2 * SUBMIT_EPSILON;
 
                                 bool submitAdvanced = ap.LastSubmit > lastSeen + SUBMIT_EPSILON;
+
                                 bool needsStaleRefresh = true;
                                 lock (Sync)
                                 {
@@ -686,7 +702,6 @@ namespace MamboDMA.Games.ABI
             }
         }
 
-        // republish camera-fresh frames frequently so mouse/camera shifts feel instant
         private static void FramePulseLoop()
         {
             while (_running)
@@ -697,10 +712,7 @@ namespace MamboDMA.Games.ABI
                     lock (Sync) currentPositions = ActorPositions?.Count > 0 ? new List<ActorPos>(ActorPositions) : null;
                     if (currentPositions != null)
                     {
-                        // latest camera snapshot
-                        TryGetCameraSnapshot(out var cam, out var local, out var ctrlYaw, out var camBias);
-
-                        // Rebase camera/local to the *same* bias the positions were built with
+                        TryGetCameraSnapshot(out var cam, out var local, out _, out var camBias);
                         var camRebased   = cam;   camRebased.Location = cam.Location - camBias + _positionsBias;
                         var localRebased =          local             - camBias + _positionsBias;
 
@@ -709,14 +721,14 @@ namespace MamboDMA.Games.ABI
                         {
                             Cam       = camRebased,
                             Local     = localRebased,
-                            Positions = currentPositions, // already built with _positionsBias
+                            Positions = currentPositions,
                             Stamp     = System.Diagnostics.Stopwatch.GetTimestamp()
                         };
                         Interlocked.Increment(ref _frameSeq);
                     }
                 }
                 catch { }
-                HighResDelay(1); // very small ¡ª keeps ESP reacting to mouse instantly
+                HighResDelay(1);
             }
         }
 
@@ -774,7 +786,7 @@ namespace MamboDMA.Games.ABI
                         float lastSeen = 0f;
                         _lastSubmitSeen.TryGetValue(a.Pawn, out lastSeen);
 
-                        // detect backwards (wrap/LOD): allow recompute
+                        // detect backwards
                         if (ap.LastSubmit + SUBMIT_EPSILON < lastSeen)
                             _lastSubmitSeen[a.Pawn] = ap.LastSubmit - 2 * SUBMIT_EPSILON;
 
@@ -791,7 +803,7 @@ namespace MamboDMA.Games.ABI
                         }
                         if (!(submitAdvanced || needsStaleRefresh)) continue;
 
-                        var ctwLocal = ap.Ctw; // bias-aligned CTW from positions
+                        var ctwLocal = ap.Ctw;
                         if (Skeleton.TryGetWorldBones(a.Mesh, a.Root, in ctwLocal, out var pts, out var dbg))
                         {
                             lock (Sync) _skeletons[a.Pawn] = (pts, System.Diagnostics.Stopwatch.GetTimestamp());
@@ -834,7 +846,6 @@ namespace MamboDMA.Games.ABI
 
             long hz = System.Diagnostics.Stopwatch.Frequency;
             long maxAge  = (long)(SKEL_MAX_AGE_MS  * 0.001 * hz);
-            // long minHold = (long)(SKEL_MIN_HOLD_MS * 0.001 * hz); // reserved
 
             lock (Sync)
             {
@@ -869,6 +880,69 @@ namespace MamboDMA.Games.ABI
             int sleepMs = Math.Max(0, targetMs - 1);
             if (sleepMs > 0) Thread.Sleep(sleepMs);
             while (sw.ElapsedMilliseconds < targetMs) Thread.SpinWait(80);
+        }
+
+        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤ Weapon zoom poller ©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        private static void CacheWeaponZoomLoop()
+        {
+            while (_running)
+            {
+                try
+                {
+                    if (LocalPawn == 0 || ABIOffsetsExt.OFF_PAWN_WEAPONMAN == 0)
+                    {
+                        lock (_zoomSync) _zoom = default;
+                        HighResDelay(16);
+                        continue;
+                    }
+
+                    ulong wm = DmaMemory.Read<ulong>(LocalPawn + (ulong)ABIOffsetsExt.OFF_PAWN_WEAPONMAN);
+                    if (wm == 0) { lock (_zoomSync) _zoom = default; HighResDelay(16); continue; }
+
+                    ulong weapon = DmaMemory.Read<ulong>(wm + ABIOffsetsExt.OFF_WEAPON_CURRENT);
+                    if (weapon == 0) { lock (_zoomSync) _zoom = default; HighResDelay(16); continue; }
+
+                    ulong zoomComp = DmaMemory.Read<ulong>(weapon + ABIOffsetsExt.OFF_WEAPON_ZOOMCOMP);
+                    if (zoomComp == 0) { lock (_zoomSync) _zoom = default; HighResDelay(16); continue; }
+
+                    using var map = DmaMemory.Scatter();
+                    var r = map.AddRound(false);
+                    r[0].AddValueEntry<float>(0, zoomComp + ABIOffsetsExt.OFF_ZOOM_PROGRESSRATE);
+                    r[0].AddValueEntry<float>(1, zoomComp + ABIOffsetsExt.OFF_ZOOM_SCOPEMAG);
+                    map.Execute();
+
+                    float progress = r[0].TryGetValue(0, out float p) ? p : 0f;         // 0..1
+                    float scopeMag = r[0].TryGetValue(1, out float m) ? m : 1f;         // e.g., 1.0, 3.0, 6.0 ¡­
+                    if (!float.IsFinite(progress)) progress = 0f;
+                    if (!float.IsFinite(scopeMag)) scopeMag = 1f;
+                    progress = Math.Clamp(progress, 0f, 1.2f); // small overshoot guard
+                    scopeMag = Math.Clamp(scopeMag, 1f, 60f);
+
+                    float zoom = 1f + (scopeMag - 1f) * progress;
+                    zoom = Math.Clamp(zoom, 1f, 60f);
+
+                    lock (_zoomSync)
+                    {
+                        _zoom = new ZoomInfo
+                        {
+                            Valid = true,
+                            Zoom = zoom,
+                            ScopeMag = scopeMag,
+                            Progress = Math.Clamp(progress, 0f, 1f),
+                            WeaponMan = wm,
+                            CurrentWeapon = weapon,
+                            ZoomComp = zoomComp,
+                            Stamp = System.Diagnostics.Stopwatch.GetTimestamp()
+                        };
+                    }
+                }
+                catch
+                {
+                    lock (_zoomSync) _zoom = default;
+                }
+
+                HighResDelay(8);
+            }
         }
 
         // data
