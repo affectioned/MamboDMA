@@ -2,6 +2,9 @@
   "file": "Farm.png",
   "inScale": 16.264,
   "yFlip": false,
-  "worldOffsetCm": { "x": 21937, "y": 21510 },
-  "zoom": 0.6
+  "worldOffsetCm": {
+    "x": 32013,
+    "y": 33018
+  },
+  "zoom": 3.7
 }

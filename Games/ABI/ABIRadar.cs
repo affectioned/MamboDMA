@@ -58,24 +58,20 @@ namespace MamboDMA.Games.ABI
 
             try
             {
-                // fresh listener every time we start
                 _http = new HttpListener();
                 _http.Prefixes.Add(Prefix);
                 _http.Start();
             }
             catch (HttpListenerException hex)
             {
-                // Most common cause is missing URL ACL (Access is denied.)
                 if (Prefix.StartsWith("http://+:", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!UpnpMapper.EnsureUrlAcl(Port, out var aclErr))
                         throw new InvalidOperationException(
                             LastError = $"Failed to create URL ACL automatically: {aclErr}", hex);
 
-                    // Optional: open firewall
                     UpnpMapper.EnsureFirewallRule(Port, "MamboDMA WebRadar", out _);
 
-                    // Try again after ACL is created (with a brand-new instance)
                     _http = new HttpListener();
                     _http.Prefixes.Add(Prefix);
                     _http.Start();
@@ -89,20 +85,18 @@ namespace MamboDMA.Games.ABI
             catch (Exception ex)
             {
                 LastError = $"Start failed: {ex.GetType().Name}: {ex.Message}";
-                // ensure we don't keep a half-initialized listener around
                 try { _http?.Close(); } catch { }
                 _http = null;
                 throw;
             }
 
-            // Optional UPnP map (best-effort)
             if (_enableUpnp)
             {
                 try
                 {
                     _upnp?.Dispose();
                     _upnp = new UpnpMapper();
-                    var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                    var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(8));
                     _ = System.Threading.Tasks.Task.Run(async () =>
                     {
                         if (await _upnp.TryMapAsync(Port, Port, "MamboDMA WebRadar", cts.Token))
@@ -135,7 +129,6 @@ namespace MamboDMA.Games.ABI
 
             _running = false;
 
-            // Close all clients first so their streams don't keep the listener alive
             lock (_clientsLock)
             {
                 foreach (var c in _clients) { try { c.Dispose(); } catch { } }
@@ -143,8 +136,8 @@ namespace MamboDMA.Games.ABI
             }
 
             try { _http?.Stop(); } catch { }
-            try { _http?.Close(); } catch { }   // ensures ObjectDisposed for any stray calls
-            try { _http = null; } catch { }
+            try { _http?.Close(); } catch { }
+            _http = null;
 
             try { _acceptThread?.Join(500); } catch { }
             try { _broadcastThread?.Join(500); } catch { }
@@ -155,7 +148,7 @@ namespace MamboDMA.Games.ABI
 
         private void AcceptLoop()
         {
-            var listener = _http; // capture to avoid races if _http is nulled in Stop()
+            var listener = _http;
 
             while (_running && listener != null)
             {
@@ -164,15 +157,10 @@ namespace MamboDMA.Games.ABI
                 {
                     ctx = listener.GetContext();
                 }
-                catch (ObjectDisposedException)
+                catch (ObjectDisposedException) { break; }
+                catch (HttpListenerException)
                 {
-                    break; // listener fully disposed
-                }
-                catch (HttpListenerException hex)
-                {
-                    // 995/Operation canceled or any error while stopping -> exit
                     if (!_running || listener == null || !listener.IsListening) break;
-                    // transient error; continue
                     continue;
                 }
                 catch
@@ -184,69 +172,27 @@ namespace MamboDMA.Games.ABI
                 if (ctx?.Request?.Url == null) { SafeClose(ctx); continue; }
                 var path = ctx.Request.Url.AbsolutePath ?? "/";
 
+                // API routes
                 if (path.Equals("/stream", StringComparison.OrdinalIgnoreCase)) { HandleSse(ctx); continue; }
                 if (path.Equals("/api/frame", StringComparison.OrdinalIgnoreCase)) { HandleApiFrame(ctx); continue; }
                 if (path.Equals("/ping", StringComparison.OrdinalIgnoreCase)) { HandlePing(ctx); continue; }
                 if (path.Equals("/status", StringComparison.OrdinalIgnoreCase)) { HandleStatus(ctx); continue; }
                 if (path.Equals("/api/maps", StringComparison.OrdinalIgnoreCase)) { HandleApiMaps(ctx); continue; }
+                if (path.StartsWith("/api/mapcfg/", StringComparison.OrdinalIgnoreCase)) { HandleApiMapCfg(ctx); continue; }
+
+                // Allow putting sidecar JSON right next to images: PUT /<dir>/<MapName>.json
+                if (ctx.Request.HttpMethod.Equals("PUT", StringComparison.OrdinalIgnoreCase)
+                    && path.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                {
+                    HandleSidecarPut(ctx);
+                    continue;
+                }
+
+                // static files
                 HandleStatic(ctx);
             }
         }
-        private void HandleApiMaps(HttpListenerContext ctx)
-        {
-            try
-            {
-                string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "WebRadar");
-                var list = new List<object>();
 
-                static void AddFromDir(string dir, string urlPrefix, List<object> outList)
-                {
-                    if (!Directory.Exists(dir)) return;
-                    foreach (var path in Directory.EnumerateFiles(dir, "*.*", SearchOption.TopDirectoryOnly))
-                    {
-                        var ext = Path.GetExtension(path)?.ToLowerInvariant();
-                        if (ext is not (".png" or ".jpg" or ".jpeg")) continue;
-
-                        var name = Path.GetFileNameWithoutExtension(path);
-                        var file = Path.GetFileName(path);
-                        var url = $"{urlPrefix}{file}";
-                        outList.Add(new { name, file, url });
-                    }
-                }
-
-                // 1) main folder
-                AddFromDir(root, "/", list);
-
-                // 2) fallback: /Maps subfolder
-                if (list.Count == 0)
-                {
-                    var mapsDir = Path.Combine(root, "Maps");
-                    AddFromDir(mapsDir, "/Maps/", list);
-                }
-
-                // sort by name for stable UI
-                list.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(
-                    (string)a.GetType().GetProperty("name")!.GetValue(a)!,
-                    (string)b.GetType().GetProperty("name")!.GetValue(b)!
-                ));
-
-                var json = System.Text.Json.JsonSerializer.Serialize(list);
-                var buf = Encoding.UTF8.GetBytes(json);
-                ctx.Response.ContentType = "application/json; charset=utf-8";
-                ctx.Response.ContentLength64 = buf.Length;
-                ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*");
-                ctx.Response.OutputStream.Write(buf, 0, buf.Length);
-            }
-            catch
-            {
-                var buf = Encoding.UTF8.GetBytes("[]");
-                ctx.Response.ContentType = "application/json; charset=utf-8";
-                ctx.Response.ContentLength64 = buf.Length;
-                ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*");
-                try { ctx.Response.OutputStream.Write(buf, 0, buf.Length); } catch { }
-            }
-            finally { SafeClose(ctx); }
-        }
         private void HandlePing(HttpListenerContext ctx)
         {
             try
@@ -272,7 +218,7 @@ namespace MamboDMA.Games.ABI
                 resp.Headers.Add("Cache-Control", "no-cache");
                 resp.Headers.Add("Access-Control-Allow-Origin", "*");
                 resp.Headers.Add("Connection", "keep-alive");
-                resp.Headers.Add("X-Accel-Buffering", "no"); // avoid proxy buffering
+                resp.Headers.Add("X-Accel-Buffering", "no");
                 var client = new SseClient(resp);
                 lock (_clientsLock) _clients.Add(client);
 
@@ -299,12 +245,166 @@ namespace MamboDMA.Games.ABI
             finally { SafeClose(ctx); }
         }
 
+        private void HandleApiMaps(HttpListenerContext ctx)
+        {
+            try
+            {
+                string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "WebRadar");
+                var list = new List<object>();
+
+                static void AddFromDir(string dir, string urlPrefix, List<object> outList)
+                {
+                    if (!Directory.Exists(dir)) return;
+                    foreach (var path in Directory.EnumerateFiles(dir, "*.*", SearchOption.TopDirectoryOnly))
+                    {
+                        var ext = Path.GetExtension(path)?.ToLowerInvariant();
+                        if (ext is not (".png" or ".jpg" or ".jpeg")) continue;
+
+                        var name = Path.GetFileNameWithoutExtension(path);
+                        var file = Path.GetFileName(path);
+                        var url = $"{urlPrefix}{file}";
+                        outList.Add(new { name, file, url });
+                    }
+                }
+
+                AddFromDir(root, "/", list);
+
+                if (list.Count == 0)
+                {
+                    var mapsDir = Path.Combine(root, "Maps");
+                    AddFromDir(mapsDir, "/Maps/", list);
+                }
+
+                list.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(
+                    (string)a.GetType().GetProperty("name")!.GetValue(a)!,
+                    (string)b.GetType().GetProperty("name")!.GetValue(b)!
+                ));
+
+                var json = System.Text.Json.JsonSerializer.Serialize(list);
+                var buf = Encoding.UTF8.GetBytes(json);
+                ctx.Response.ContentType = "application/json; charset=utf-8";
+                ctx.Response.ContentLength64 = buf.Length;
+                ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*");
+                ctx.Response.OutputStream.Write(buf, 0, buf.Length);
+            }
+            catch
+            {
+                var buf = Encoding.UTF8.GetBytes("[]");
+                ctx.Response.ContentType = "application/json; charset=utf-8";
+                ctx.Response.ContentLength64 = buf.Length;
+                ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*");
+                try { ctx.Response.OutputStream.Write(buf, 0, buf.Length); } catch { }
+            }
+            finally { SafeClose(ctx); }
+        }
+
+        // POST /api/mapcfg/<name>
+        // Body: { "dir":"<url dir>", "name":"MapName", "config": { ... } }
+        private void HandleApiMapCfg(HttpListenerContext ctx)
+        {
+            try
+            {
+                if (!ctx.Request.HttpMethod.Equals("POST", StringComparison.OrdinalIgnoreCase))
+                {
+                    ctx.Response.StatusCode = 405;
+                    ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*");
+                    return;
+                }
+
+                string body;
+                using (var sr = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding ?? Encoding.UTF8))
+                    body = sr.ReadToEnd();
+
+                var payload = System.Text.Json.JsonDocument.Parse(body).RootElement;
+
+                string dir  = payload.TryGetProperty("dir", out var d) ? d.GetString() ?? "" : "";
+                string name = payload.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                var cfgElem = payload.TryGetProperty("config", out var c) ? c : default;
+
+                if (string.IsNullOrWhiteSpace(name) || cfgElem.ValueKind == System.Text.Json.JsonValueKind.Undefined)
+                {
+                    ctx.Response.StatusCode = 400;
+                    ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*");
+                    return;
+                }
+
+                string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "WebRadar");
+                string subdir = SafeJoinUrlDir(root, dir);
+                Directory.CreateDirectory(subdir);
+
+                string target = Path.Combine(subdir, $"{SanitizeFileName(name)}.json");
+                var json = System.Text.Json.JsonSerializer.Serialize(cfgElem, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(target, json, new UTF8Encoding(false));
+
+                var ok = Encoding.UTF8.GetBytes("{\"ok\":true}");
+                ctx.Response.ContentType = "application/json; charset=utf-8";
+                ctx.Response.ContentLength64 = ok.Length;
+                ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*");
+                ctx.Response.OutputStream.Write(ok, 0, ok.Length);
+            }
+            catch
+            {
+                ctx.Response.StatusCode = 500;
+                ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*");
+            }
+            finally { SafeClose(ctx); }
+        }
+
+        // PUT /<dir>/<MapName>.json  (sidecar next to image)
+        // Body is the JSON to save.
+        private void HandleSidecarPut(HttpListenerContext ctx)
+        {
+            try
+            {
+                if (!ctx.Request.HttpMethod.Equals("PUT", StringComparison.OrdinalIgnoreCase))
+                {
+                    ctx.Response.StatusCode = 405;
+                    ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*");
+                    return;
+                }
+
+                string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "WebRadar");
+                string relUrl = (ctx.Request.Url?.AbsolutePath ?? "/").TrimStart('/');
+
+                // prevent path traversal
+                if (relUrl.Contains("..")) { ctx.Response.StatusCode = 400; ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*"); return; }
+
+                string full = Path.GetFullPath(Path.Combine(root, relUrl));
+                if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                {
+                    ctx.Response.StatusCode = 403;
+                    ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*");
+                    return;
+                }
+
+                Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+
+                using (var fs = new FileStream(full, FileMode.Create, FileAccess.Write, FileShare.None))
+                {
+                    ctx.Request.InputStream.CopyTo(fs);
+                }
+
+                ctx.Response.StatusCode = 200;
+                ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*");
+                var ok = Encoding.UTF8.GetBytes("{\"ok\":true}");
+                ctx.Response.ContentType = "application/json; charset=utf-8";
+                ctx.Response.ContentLength64 = ok.Length;
+                ctx.Response.OutputStream.Write(ok, 0, ok.Length);
+            }
+            catch
+            {
+                ctx.Response.StatusCode = 500;
+                ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*");
+            }
+            finally { SafeClose(ctx); }
+        }
+
         private void HandleStatic(HttpListenerContext ctx)
         {
             try
             {
                 var req = ctx.Request;
-                string rel = req.Url.AbsolutePath;
+                string rel = req.Url!.AbsolutePath;
                 if (string.IsNullOrWhiteSpace(rel) || rel == "/") rel = "/index.html";
 
                 rel = rel.Replace('\\', '/').TrimStart('/');
@@ -347,6 +447,7 @@ namespace MamboDMA.Games.ABI
                 ".jpg" or ".jpeg" => "image/jpeg",
                 ".gif"  => "image/gif",
                 ".svg"  => "image/svg+xml",
+                ".json" => "application/json; charset=utf-8",
                 _       => "application/octet-stream",
             };
         }
@@ -381,7 +482,7 @@ namespace MamboDMA.Games.ABI
             if (!Players.TryGetFrame(out var fr) || fr.Positions == null)
                 return "{\"ok\":false}";
 
-            // Use stable control-rotation yaw (won't snap on map open)
+            // Use stable control-rotation yaw
             float yawDeg = Players.CtrlYaw;
             ulong sessionId = Players.PersistentLevel;
             float camFov = fr.Cam.Fov;
@@ -397,7 +498,6 @@ namespace MamboDMA.Games.ABI
             sb.Append(",\"session\":"); sb.Append(sessionId.ToString());
             sb.Append(",\"fov\":"); sb.Append(camFov.ToString("0.###", inv));
 
-            // self (with Z + CtrlYaw)
             sb.Append(",\"self\":{");
             sb.AppendFormat(inv, "\"x\":{0:0.###},\"y\":{1:0.###},\"z\":{2:0.###},\"yaw\":{3:0.###}",
                 fr.Local.X, fr.Local.Y, fr.Local.Z, yawDeg);
@@ -445,7 +545,6 @@ namespace MamboDMA.Games.ABI
         {
             try
             {
-                // Get local interface IPs and stringify them to avoid Join() ambiguity
                 var addrs = System.Net.Dns.GetHostAddresses(System.Net.Dns.GetHostName());
                 var ipStrings = Array.ConvertAll(addrs ?? Array.Empty<System.Net.IPAddress>(), a => a.ToString());
                 var ipsJson = string.Join(",", Array.ConvertAll(ipStrings, s => $"\"{s}\""));
@@ -473,7 +572,6 @@ namespace MamboDMA.Games.ABI
             finally { SafeClose(ctx); }
         }
 
-        // Build best public URL we know about
         public string GetPublicUrl()
         {
             if (!string.IsNullOrEmpty(ExternalUrl)) return ExternalUrl.TrimEnd('/');
@@ -481,12 +579,10 @@ namespace MamboDMA.Games.ABI
             return null;
         }
 
-        // Fallback external-IP discovery (ipify, icanhazip, ifconfig.me)
         private async System.Threading.Tasks.Task RefreshExternalIpFallbackAsync()
         {
             try
             {
-                // If UPnP already gave us a valid external address, keep it.
                 if (!string.IsNullOrEmpty(ExternalIp))
                     return;
 
@@ -517,6 +613,25 @@ namespace MamboDMA.Games.ABI
                 }
             }
             catch { /* ignore */ }
+        }
+
+        private static string SanitizeFileName(string s)
+        {
+            foreach (var ch in Path.GetInvalidFileNameChars())
+                s = s.Replace(ch, '_');
+            return s;
+        }
+
+        private static string SafeJoinUrlDir(string root, string urlDir)
+        {
+            var clean = (urlDir ?? "").Replace('\\', '/');
+            clean = clean.Trim();
+            if (clean.StartsWith("/")) clean = clean[1..];
+            if (clean.Contains("..")) clean = clean.Replace("..", "");
+            var full = Path.GetFullPath(Path.Combine(root, clean));
+            if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("path escape");
+            return full;
         }
 
         private sealed class SseClient : IDisposable
@@ -589,9 +704,9 @@ namespace MamboDMA.Games.ABI
         private static int _port = 8088;
         private static int _rate = 20;
         private static bool _autoOpen = true;
-        private static string _lastStatus = ""; // persist message across frames
+        private static string _lastStatus = "";
         private static bool _enableUpnp = false;
-        private static bool _bindAll = false; // listen on 0.0.0.0 if true
+        private static bool _bindAll = false;
 
         public static void DrawPanel()
         {
@@ -666,11 +781,9 @@ namespace MamboDMA.Games.ABI
                     catch (Exception ex) { _lastStatus = $"Open folder error: {ex.Message}"; }
                 }
 
-                // Local quick URL (always available)
                 ImGui.SameLine();
                 ImGui.TextColored(new Vector4(0.2f, 0.9f, 0.2f, 1), $"http://localhost:{_port}/");
 
-                // ©¤©¤ Public URL (click to copy) ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
                 if (_srv != null)
                 {
                     var pubUrl = _srv.GetPublicUrl();
@@ -679,12 +792,12 @@ namespace MamboDMA.Games.ABI
                     ImGui.SameLine();
                     if (!string.IsNullOrEmpty(pubUrl))
                     {
-                        RenderUrlRow(pubUrl.TrimEnd('/')); // clickable + copy
+                        RenderUrlRow(pubUrl.TrimEnd('/'));
                         ImGui.SameLine();
                         if (ImGui.SmallButton("Refresh"))
                         {
                             _lastStatus = "Refreshing public IP¡­";
-                            _srv.TriggerExternalIpRefresh();  // no reflection, no await
+                            _srv.TriggerExternalIpRefresh();
                         }
                     }
                     else
@@ -705,13 +818,11 @@ namespace MamboDMA.Games.ABI
                 ImGui.TextColored(col, _lastStatus);
             }
 
-            // quick test buttons
             if (ImGui.Button("Test /ping")) TryOpen($"http://localhost:{_port}/ping");
             ImGui.SameLine();
             if (ImGui.Button("Test /api/frame")) TryOpen($"http://localhost:{_port}/api/frame");
         }
 
-        // Renders a clickable URL with a small "Copy" button; clicking either copies to clipboard.
         private static void RenderUrlRow(string url)
         {
             ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.3f, 0.8f, 1f, 1f));
@@ -750,7 +861,6 @@ namespace MamboDMA.Games.ABI
 
     internal static class FirewallHelper
     {
-        // Best-effort: allow inbound TCP for the chosen port
         public static void TryAddInboundRule(int port, string name = "MamboDMA WebRadar")
         {
             try

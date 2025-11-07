@@ -1,3 +1,4 @@
+// File: Games/ABI/ABIGame.cs
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -8,7 +9,8 @@ using MamboDMA.Services;
 using static MamboDMA.OverlayWindow;
 using static MamboDMA.Misc;
 using MamboDMA.Games;   // Keybind profiles / registry
-using MamboDMA.Input;   // InputManager & Makcu device API
+using MamboDMA.Input;
+using System.Runtime.InteropServices;   // InputManager & Makcu device API
 
 namespace MamboDMA.Games.ABI
 {
@@ -104,6 +106,7 @@ namespace MamboDMA.Games.ABI
 
             TimerResolution.Enable1ms();
             Players.StartCache();
+            ABILoot.Start();
             Logger.Info("[ABI] cache loops started");
         }
 
@@ -205,6 +208,10 @@ namespace MamboDMA.Games.ABI
                     {
                         if (ImGui.CollapsingHeader("Basics", ImGuiTreeNodeFlags.DefaultOpen))
                         {
+                            if (ImGui.Button("Open Loot List")) _showLootWindow = true;
+                            ImGui.SameLine();
+                            ImGui.TextDisabled("¡û browse containers & ground loot");
+
                             ImGui.Checkbox("Draw Boxes", ref cfg.DrawBoxes);
                             ImGui.Checkbox("Draw Names", ref cfg.DrawNames);
                             ImGui.Checkbox("Draw Distance", ref cfg.DrawDistance);
@@ -443,9 +450,229 @@ namespace MamboDMA.Games.ABI
                         Cfg.DeadFill, Cfg.DeadOutline,
                         zf);
                 }
-
+                if (_showLootWindow) DrawLootListWindow();
                 DrawAimbotOverlay();
             });
+        }
+
+        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤ Loot UI state ©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        private static bool _showLootWindow = false;
+        private static string _lootFilter = "";
+
+        // Small helpers to read class & world pos for containers in the UI
+        private static string GetActorClassName(ulong actor)
+        {
+            try
+            {
+                if (actor == 0) return "";
+                uint fname = DmaMemory.Read<uint>(actor + 24);
+                return ABINamePool.GetName(fname) ?? "";
+            }
+            catch { return ""; }
+        }
+
+        private static Vector3 GetActorWorldPos(ulong actor)
+        {
+            if (actor == 0) return default;
+            try
+            {
+                ulong root = DmaMemory.Read<ulong>(actor + ABIOffsets.AActor_RootComponent);
+                if (root == 0) return default;
+                ulong ctwPtr = DmaMemory.Read<ulong>(root + ABIOffsets.USceneComponent_ComponentToWorld_Ptr);
+                if (ctwPtr == 0) return default;
+                var t = DmaMemory.Read<FTransform>(ctwPtr);
+                if (!float.IsFinite(t.Translation.X) || !float.IsFinite(t.Translation.Y) || !float.IsFinite(t.Translation.Z))
+                    return default;
+
+                // Same bias as Players so radar stays one-time calibrated
+                Vector3 bias = Players.LocalPosition - Players.Camera.Location;
+                return t.Translation + bias;
+            }
+            catch { return default; }
+        }
+
+        private static void DrawLootListWindow()
+        {
+            ImGui.SetNextWindowSize(new Vector2(1100, 640), ImGuiCond.FirstUseEver);
+            if (!ImGui.Begin("ABI Loot List", ref _showLootWindow,
+                ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.MenuBar))
+            {
+                ImGui.End();
+                return;
+            }
+
+            // Menu bar (filter + refresh info)
+            if (ImGui.BeginMenuBar())
+            {
+                ImGui.TextDisabled("Filter:");
+                ImGui.SameLine();
+                ImGui.SetNextItemWidth(240);
+                ImGui.InputText("##loot_filter", ref _lootFilter, 128);
+                ImGui.SameLine();
+                if (ImGui.Button("Clear")) _lootFilter = "";
+                ImGui.EndMenuBar();
+            }
+
+            if (!ABILoot.TryGetLoot(out var frame) || frame.Items == null)
+            {
+                ImGui.TextDisabled("No loot data yet.");
+                ImGui.End();
+                return;
+            }
+
+            ImGui.TextDisabled($"Seen Actors: {frame.TotalActorsSeen} ¡¤ Containers: {frame.ContainersFound} (expanded {frame.ContainersExpanded}) ¡¤ Items total: {frame.Items.Count}");
+            ImGui.Separator();
+
+            var items = frame.Items;
+            string filter = _lootFilter?.Trim() ?? "";
+            bool useFilter = filter.Length >= 2;
+
+            // Group by container
+            var ground = new List<ABILoot.Item>(256);
+            var byContainer = new Dictionary<ulong, List<ABILoot.Item>>(64);
+
+            foreach (var it in items)
+            {
+                if (useFilter)
+                {
+                    if (!(it.ClassName?.Contains(filter, StringComparison.OrdinalIgnoreCase) == true
+                       || it.Label?.Contains(filter, StringComparison.OrdinalIgnoreCase) == true))
+                        continue;
+                }
+
+                if (!it.InContainer || it.ContainerActor == 0)
+                {
+                    ground.Add(it);
+                }
+                else
+                {
+                    if (!byContainer.TryGetValue(it.ContainerActor, out var list))
+                    {
+                        list = new List<ABILoot.Item>(16);
+                        byContainer[it.ContainerActor] = list;
+                    }
+                    list.Add(it);
+                }
+            }
+
+            // Containers section
+            if (ImGui.CollapsingHeader($"Containers ({frame.ContainersFound})", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                var contKeys = new List<ulong>(byContainer.Keys);
+                contKeys.Sort((a, b) =>
+                {
+                    var pa = GetActorWorldPos(a);
+                    var pb = GetActorWorldPos(b);
+                    var loc = Players.LocalPosition;
+                    float da = Vector3.DistanceSquared(loc, pa);
+                    float db = Vector3.DistanceSquared(loc, pb);
+                    return da.CompareTo(db);
+                });
+
+                foreach (var cont in contKeys)
+                {
+                    string cname = GetActorClassName(cont);
+                    var cpos = GetActorWorldPos(cont);
+                    string cposStr = $"{cpos.X:F0}, {cpos.Y:F0}, {cpos.Z:F0}";
+                    var list = byContainer[cont];
+
+                    bool open = ImGui.TreeNodeEx($"0x{cont:X}  {cname}  ({list.Count})###cont_{cont}",
+                                                 ImGuiTreeNodeFlags.SpanFullWidth);
+                    ImGui.SameLine();
+                    ImGui.TextDisabled($"pos: {cposStr}");
+
+                    if (open)
+                    {
+                        if (ImGui.BeginTable($"tbl_cont_{cont}", 6,
+                                ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY,
+                                new Vector2(-1, Math.Min(280, 24 * (list.Count + 1)))))
+                        {
+                            ImGui.TableSetupScrollFreeze(0, 1);
+                            ImGui.TableSetupColumn("Class", ImGuiTableColumnFlags.WidthStretch);
+                            ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthStretch);
+                            ImGui.TableSetupColumn("Stack", ImGuiTableColumnFlags.WidthFixed, 48);
+                            ImGui.TableSetupColumn("Price", ImGuiTableColumnFlags.WidthFixed, 80);
+                            ImGui.TableSetupColumn("Actor", ImGuiTableColumnFlags.WidthFixed, 140);
+                            ImGui.TableSetupColumn("Pos (X,Y,Z)", ImGuiTableColumnFlags.WidthFixed, 210);
+                            ImGui.TableHeadersRow();
+
+                            list.Sort((x, y) =>
+                            {
+                                int r = string.Compare(x.Label, y.Label, StringComparison.OrdinalIgnoreCase);
+                                if (r != 0) return r;
+                                return string.Compare(x.ClassName, y.ClassName, StringComparison.OrdinalIgnoreCase);
+                            });
+
+                            foreach (ref readonly var it in CollectionsMarshal.AsSpan(list))
+                            {
+                                var p = it.Position;
+                                string posStr = $"{p.X:F0}, {p.Y:F0}, {p.Z:F0}";
+
+                                ImGui.TableNextRow();
+                                ImGui.TableSetColumnIndex(0); ImGui.TextUnformatted(it.ClassName ?? "");
+                                ImGui.TableSetColumnIndex(1); ImGui.TextUnformatted(it.Label ?? "");
+                                ImGui.TableSetColumnIndex(2); ImGui.TextUnformatted(it.Stack.ToString());
+                                ImGui.TableSetColumnIndex(3); ImGui.TextUnformatted(it.ApproxPrice > 0 ? it.ApproxPrice.ToString() : "-");
+                                ImGui.TableSetColumnIndex(4); ImGui.TextUnformatted($"0x{it.Actor:X}");
+                                ImGui.TableSetColumnIndex(5); ImGui.TextUnformatted(posStr);
+                            }
+
+                            ImGui.EndTable();
+                        }
+
+                        ImGui.TreePop();
+                    }
+                }
+            }
+
+            ImGui.Separator();
+
+            // Ground loot section
+            if (ImGui.CollapsingHeader($"Ground Loot ({ground.Count})", ImGuiTreeNodeFlags.DefaultOpen))
+            {
+                if (ImGui.BeginTable("tbl_ground_loot", 7,
+                        ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY,
+                        new Vector2(-1, -1)))
+                {
+                    ImGui.TableSetupScrollFreeze(0, 1);
+                    ImGui.TableSetupColumn("Class", ImGuiTableColumnFlags.WidthStretch);
+                    ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthStretch);
+                    ImGui.TableSetupColumn("Stack", ImGuiTableColumnFlags.WidthFixed, 50);
+                    ImGui.TableSetupColumn("Price", ImGuiTableColumnFlags.WidthFixed, 80);
+                    ImGui.TableSetupColumn("In Container", ImGuiTableColumnFlags.WidthFixed, 100);
+                    ImGui.TableSetupColumn("Actor", ImGuiTableColumnFlags.WidthFixed, 140);
+                    ImGui.TableSetupColumn("Pos (X,Y,Z)", ImGuiTableColumnFlags.WidthFixed, 210);
+                    ImGui.TableHeadersRow();
+
+                    var loc = Players.LocalPosition;
+                    ground.Sort((a, b) =>
+                    {
+                        float da = Vector3.DistanceSquared(loc, a.Position);
+                        float db = Vector3.DistanceSquared(loc, b.Position);
+                        return da.CompareTo(db);
+                    });
+
+                    foreach (ref readonly var it in CollectionsMarshal.AsSpan(ground))
+                    {
+                        var p = it.Position;
+                        string posStr = $"{p.X:F0}, {p.Y:F0}, {p.Z:F0}";
+                    
+                        ImGui.TableNextRow();
+                        ImGui.TableSetColumnIndex(0); ImGui.TextUnformatted(it.ClassName ?? "");
+                        ImGui.TableSetColumnIndex(1); ImGui.TextUnformatted(it.Label ?? "");
+                        ImGui.TableSetColumnIndex(2); ImGui.TextUnformatted(it.Stack.ToString());
+                        ImGui.TableSetColumnIndex(3); ImGui.TextUnformatted(it.ApproxPrice > 0 ? it.ApproxPrice.ToString() : "-");
+                        ImGui.TableSetColumnIndex(4); ImGui.TextUnformatted(it.InContainer ? "yes" : "no");
+                        ImGui.TableSetColumnIndex(5); ImGui.TextUnformatted($"0x{it.Actor:X}");
+                        ImGui.TableSetColumnIndex(6); ImGui.TextUnformatted(posStr);
+                    }
+
+                    ImGui.EndTable();
+                }
+            }
+
+            // footer
+            ImGui.End();
         }
 
         // ---------- AIMBOT CORE ----------
@@ -558,7 +785,7 @@ namespace MamboDMA.Games.ABI
                         hitWorld = ap.Position;
                 }
 
-                // Zoom-aware projection
+                // Zoom-aware projection (keeps ADS consistent)
                 if (!ABIMath.WorldToScreenZoom(hitWorld, fr.Cam, W, H, zoom, out var pt))
                     continue;
 
@@ -628,14 +855,13 @@ namespace MamboDMA.Games.ABI
             uint fovCol = U32(new Vector4(1f, 1f, 1f, 0.33f));
             dl.AddCircle(center, r, fovCol, 64, fovThickness);
 
-            // Zoom-debug: show how the effective FOV shrinks when scoped
+            // Zoom-debug ring
             if (Cfg.ShowDebug && Players.TryGetZoom(out var zi) && zi.Valid && zi.Zoom > 1.01f)
             {
                 float rz = r / MathF.Max(1f, zi.Zoom);
                 uint zCol = U32(new Vector4(0.2f, 0.9f, 0.9f, 0.85f));
                 dl.AddCircle(center, rz, zCol, 64, 1.8f);
 
-                // small label near center
                 var label = $"Zoom {zi.Zoom:F2}x (Scope {zi.ScopeMag:F1}x ¡¤ {zi.Progress:P0})";
                 var size = ImGui.CalcTextSize(label);
                 var at = new Vector2(center.X - size.X * 0.5f, center.Y + r + 6f);
@@ -654,9 +880,10 @@ namespace MamboDMA.Games.ABI
                 uint dotFill  = U32(new Vector4(0.2f, 0.9f, 0.2f, 0.90f));
                 uint dotRing  = U32(new Vector4(0f, 0f, 0f, 0.90f));
 
-                dl.AddLine(center, tgt, lineCol, lineThickness);
-                dl.AddCircleFilled(tgt, 4f, dotFill, 24);
-                dl.AddCircle(tgt, 4f, dotRing, 24, 1.6f);
+                var dl2 = ImGui.GetBackgroundDrawList();
+                dl2.AddLine(center, tgt, lineCol, lineThickness);
+                dl2.AddCircleFilled(tgt, 4f, dotFill, 24);
+                dl2.AddCircle(tgt, 4f, dotRing, 24, 1.6f);
             }
         }
 
@@ -680,6 +907,7 @@ namespace MamboDMA.Games.ABI
             string preview = (_selectedInputIndex >= 0 && _selectedInputIndex < _inputDevices.Count)
                 ? _inputDevices[_selectedInputIndex].ToString()
                 : "(none)";
+
             ImGui.SetNextItemWidth(400);
             if (ImGui.BeginCombo("##AbiInputDevices", preview))
             {

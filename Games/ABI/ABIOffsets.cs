@@ -5,6 +5,7 @@ namespace MamboDMA.Games.ABI
     {
         public const ulong GWorld    = 0xAB9F1A8;
         public const ulong GNames    = 0xB017140;
+        public const ulong GObjects    = 0xb031548;
         public const ulong DecryuptKey = 0xB016D88;
 
         public const ulong UWorld_OwningGameInstance = 0x180;

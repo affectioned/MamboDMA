@@ -72,25 +72,47 @@ namespace MamboDMA.Games.ABI
 
                 Vector2 min2, max2;
 
-                if (Players.TryGetSkeleton(actors[i].Pawn, out var bones) && bones != null && bones.Length >= 14)
+                if (Players.TryGetSkeleton(actors[i].Pawn, out var bones) && bones != null && bones.Length >= 20)
                 {
-                    var headWS = bones[Skeleton.IDX_Head];
-                    var footL  = bones[Skeleton.IDX_Foot_L];
-                    var footR  = bones[Skeleton.IDX_Foot_R];
-                    var feetWS = new Vector3((footL.X + footR.X) * 0.5f, (footL.Y + footR.Y) * 0.5f, (footL.Z + footR.Z) * 0.5f);
+                    // Robust bbox from multiple projected landmarks
+                    int[] bb = new int[] {
+                        Skeleton.IDX_Head,
+                        Skeleton.IDX_Neck,
+                        Skeleton.IDX_Spine_03,
+                        Skeleton.IDX_Pelvis,
+                        Skeleton.IDX_Hand_L, Skeleton.IDX_Hand_R,
+                        Skeleton.IDX_Foot_L, Skeleton.IDX_Foot_R
+                    };
 
-                    Vector2? head2D = null, feet2D = null;
-                    if (W2S(headWS, out var headScr)) head2D = headScr;
-                    if (W2S(feetWS, out var feetScr)) feet2D = feetScr;
+                    bool any = false;
+                    Vector2 bbMin = default, bbMax = default;
 
-                    if (head2D.HasValue && feet2D.HasValue)
+                    for (int bi = 0; bi < bb.Length; bi++)
                     {
-                        float h = MathF.Abs(head2D.Value.Y - feet2D.Value.Y);
-                        h = Math.Clamp(h, 20f, 800f);
-                        float w = h * 0.35f;
-                        float cy = (head2D.Value.Y + feet2D.Value.Y) * 0.5f;
-                        min2 = new Vector2(screen.X - w * 0.5f, cy - h * 0.5f);
-                        max2 = new Vector2(screen.X + w * 0.5f, cy + h * 0.5f);
+                        var wsx = bones[bb[bi]];
+                        if (!W2S(wsx, out var sp)) continue;
+
+                        if (!any) { bbMin = bbMax = sp; any = true; }
+                        else {
+                            if (sp.X < bbMin.X) bbMin.X = sp.X;
+                            if (sp.Y < bbMin.Y) bbMin.Y = sp.Y;
+                            if (sp.X > bbMax.X) bbMax.X = sp.X;
+                            if (sp.Y > bbMax.Y) bbMax.Y = sp.Y;
+                        }
+                    }
+
+                    if (any)
+                    {
+                        // Enforce sane aspect and min size; zoom exaggerates tiny bbox
+                        float wBox = MathF.Max(18f, bbMax.X - bbMin.X);
+                        float hBox = MathF.Max(42f, bbMax.Y - bbMin.Y);
+
+                        // Slight widen to cover shoulders at high zoom
+                        float padX = MathF.Min(12f, wBox * 0.12f);
+                        float padY = MathF.Min(14f, hBox * 0.10f);
+
+                        min2 = new Vector2(bbMin.X - padX, bbMin.Y - padY);
+                        max2 = new Vector2(bbMax.X + padX, bbMax.Y + padY);
                     }
                     else
                     {
@@ -109,7 +131,7 @@ namespace MamboDMA.Games.ABI
 
                     if (drawSkeletons && distM <= maxSkelDistMeters)
                     {
-                        // Ensure your Skeleton.Draw accepts (zoom) and uses zoom-aware W2S
+                        // Ensure Skeleton.Draw uses zoom-aware W2S
                         Skeleton.Draw(list, bones, cam, scrW, scrH, clrSkel, MathF.Max(zoomEff, 1f));
                     }
                 }

@@ -91,6 +91,9 @@ namespace MamboDMA.Games.ABI
                     !r[0].TryGetValue(3, out int count) || count <= 0)
                 { dbg.Note = "Bones header invalid"; return false; }
 
+                // Guard: make sure the highest index we read exists
+                if (_fetch[^1] >= count) { dbg.Note = "Bones count shorter than fetch set"; return false; }
+
                 using var map2 = DmaMemory.Scatter();
                 var r2 = map2.AddRound(false);
                 const int SZ = 0x30; // sizeof(FTransform)
@@ -110,8 +113,11 @@ namespace MamboDMA.Games.ABI
                     if (!r2[i].TryGetValue(0, out FTransform boneCS))
                     { dbg.Note = "Bone read failed"; return false; }
 
-                    // component-space -> world: use the bone's translation in component space,
-                    // then apply ComponentToWorld
+                    // Reject NaNs early
+                    if (!float.IsFinite(boneCS.Translation.X) || !float.IsFinite(boneCS.Translation.Y) || !float.IsFinite(boneCS.Translation.Z))
+                    { dbg.Note = "BoneCS NaN"; return false; }
+
+                    // component-space -> world: apply CTW to the CS translation
                     var ws = ABIMath.TransformPosition(ctw, boneCS.Translation);
                     worldPoints[i] = ws;
 

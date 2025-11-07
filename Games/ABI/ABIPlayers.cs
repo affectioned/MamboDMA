@@ -1,4 +1,3 @@
-// MamboDMA/Games/ABI/Players.cs
 using System;
 using System.Collections.Generic;
 using System.Numerics;
@@ -27,12 +26,11 @@ namespace MamboDMA.Games.ABI
         public const float VIS_TICK = 0.06f;
 
         // ©¤©¤©¤©¤©¤©¤©¤©¤©¤ New (Weapon Zoom path) ©¤©¤©¤©¤©¤©¤©¤©¤©¤
-        // TODO: fill the pawn¡úweapon manager offset for USGCharacterWeaponManagerComponent
-        public const int OFF_PAWN_WEAPONMAN      = 0x1878; // ¡û SET ME (0 disables reading)
-        public const ulong OFF_WEAPON_CURRENT    = 0x158;  // USGCharacterWeaponManagerComponent->CurrentWeapon (ASGInventory*)
-        public const ulong OFF_WEAPON_ZOOMCOMP   = 0xB00;  // ASGWeapon->WeaponZoomComp (USGWeaponZoomComponent*)
-        public const ulong OFF_ZOOM_PROGRESSRATE = 0x404;  // USGWeaponZoomComponent->ZoomProgressRate (float)
-        public const ulong OFF_ZOOM_SCOPEMAG     = 0x578;  // USGWeaponZoomComponent->ScopeMagnification (float)
+        public const int   OFF_PAWN_WEAPONMAN      = 0x1878; // fill if known
+        public const ulong OFF_WEAPON_CURRENT      = 0x158;
+        public const ulong OFF_WEAPON_ZOOMCOMP     = 0xB00;
+        public const ulong OFF_ZOOM_PROGRESSRATE   = 0x404;
+        public const ulong OFF_ZOOM_SCOPEMAG       = 0x578;
     }
 
     public static class Players
@@ -212,7 +210,9 @@ namespace MamboDMA.Games.ABI
 
         private static void CacheCameraLoop()
         {
-            const bool useLastFrameCam = false;
+            // Use what the engine actually drew last frame to cut jitter/flicker
+            const bool useLastFrameCam = true;
+
             while (_running)
             {
                 try
@@ -599,7 +599,9 @@ namespace MamboDMA.Games.ABI
                             var a = actors[i];
                             if (a.Root == 0) continue;
 
-                            Vector3 pos = rootCtwValues[i].Translation;
+                            Vector3 pos = (meshCtwValues[i].Translation.X == 0 && meshCtwValues[i].Translation.Y == 0 && meshCtwValues[i].Translation.Z == 0)
+                                ? rootCtwValues[i].Translation
+                                : meshCtwValues[i].Translation;
 
                             float H = 0f, HM = 0f;
                             if (vitals != null && vitals.TryGetValue(a.Pawn, out var vt))
@@ -635,7 +637,7 @@ namespace MamboDMA.Games.ABI
 
                         lock (Sync) ActorPositions = new List<ActorPos>(posScratch);
 
-                        // SAME-FRAME SKELETON WARMUP (no vis gate; handles flicker)
+                        // SAME-FRAME SKELETON WARMUP (favor on-screen to save budget)
                         const int WarmupK = 12;
                         if (ActorPositions.Count > 0)
                         {
@@ -648,6 +650,12 @@ namespace MamboDMA.Games.ABI
                                 if (ap.Mesh == 0 || ap.IsDead) continue;
                                 shortlist.Add(ap);
                             }
+
+                            // Prefer currently visible to avoid wasted recomputes
+                            shortlist.RemoveAll(p => !p.IsVisible);
+
+                            // If all invisible, fall back to distance list
+                            if (shortlist.Count == 0) shortlist = new List<ActorPos>(ActorPositions);
 
                             shortlist.Sort((a, b) =>
                             {
@@ -735,8 +743,8 @@ namespace MamboDMA.Games.ABI
         private static void CacheSkeletonsLoop()
         {
             const int MAX_PER_SLICE = 48;
-            const int MIN_PER_SLICE = 8;
-            const int BUDGET_MS     = 4;
+            const int MIN_PER_SLICE = 12; // ¡ü slightly higher to reduce stale states
+            const int BUDGET_MS     = 5;  // ¡ü small budget for better stability when zoomed
             var sw = new System.Diagnostics.Stopwatch();
 
             while (_running)
