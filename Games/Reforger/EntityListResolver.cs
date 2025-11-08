@@ -8,7 +8,7 @@ namespace ArmaReforgerFeeder
 {
     /// <summary>
     /// Manages multiple entity lists from the game world.
-    /// Auto-discovers and validates all available entity lists.
+    /// CRITICAL: Arma Reforger splits entities across MULTIPLE lists - we must combine them!
     /// </summary>
     internal static class EntityListManager
     {
@@ -25,18 +25,15 @@ namespace ArmaReforgerFeeder
             }
         }
 
-        // All known entity list candidates (expanded from original)
+        // All known entity list candidates
         private static readonly ListCandidate[] Candidates = new[]
         {
-            // Primary lists (from original resolver)
             new ListCandidate(0x128, 0x134, "Primary"),
             new ListCandidate(0x138, 0x144, "Secondary"),
             new ListCandidate(0x140, 0x14C, "Tertiary"),
             new ListCandidate(0x148, 0x154, "Quaternary"),
             new ListCandidate(0x120, 0x12C, "PrePrimary"),
             new ListCandidate(0x118, 0x124, "Legacy"),
-            
-            // Additional probes for vehicles/items/loot
             new ListCandidate(0x150, 0x15C, "Extended1"),
             new ListCandidate(0x158, 0x164, "Extended2"),
             new ListCandidate(0x160, 0x16C, "Extended3"),
@@ -94,16 +91,61 @@ namespace ArmaReforgerFeeder
         }
 
         /// <summary>
-        /// Get the best list for a specific entity type.
+        /// CRITICAL: Get ALL entities from ALL valid lists for a specific type.
+        /// Arma Reforger splits entities across multiple lists!
+        /// </summary>
+        public static ulong[] GetAllEntitiesForType(ulong worldPtr, EntityType targetType, int maxTotal = 32768)
+        {
+            var lists = GetAllLists(worldPtr);
+            
+            // Filter to lists that contain this type
+            var relevantLists = lists.Where(l => 
+                l.DominantType == targetType || 
+                l.DominantType == EntityType.Unknown ||
+                l.Score > 50  // High score means good mix
+            ).ToArray();
+
+            if (relevantLists.Length == 0)
+            {
+                // Fallback: use all lists
+                relevantLists = lists;
+            }
+
+            //Console.WriteLine($"[EntityListManager] Combining {relevantLists.Length} lists for {targetType}");
+
+            var allEntities = new HashSet<ulong>(); // Use HashSet to auto-dedupe
+            
+            foreach (var list in relevantLists)
+            {
+                //Console.WriteLine($"  -> Reading {list.Name}: {list.Count} entities");
+                
+                int toRead = Math.Min(list.Count, maxTotal - allEntities.Count);
+                if (toRead <= 0) break;
+
+                var entities = DmaMemory.ReadArray<ulong>(list.ListPtr, toRead);
+                if (entities != null)
+                {
+                    foreach (var ent in entities)
+                    {
+                        if (IsValidPointer(ent))
+                            allEntities.Add(ent);
+                    }
+                }
+            }
+
+            //Console.WriteLine($"[EntityListManager] Combined total: {allEntities.Count} unique entities");
+            return allEntities.ToArray();
+        }
+
+        /// <summary>
+        /// Get entities from the best single list (old behavior - less reliable)
         /// </summary>
         public static bool TryGetBestListForType(ulong worldPtr, EntityType targetType, out ulong listPtr, out int count)
         {
             var lists = GetAllLists(worldPtr);
             
-            // First try to find a list dominated by the target type
             var match = lists.FirstOrDefault(l => l.DominantType == targetType);
             
-            // Fallback to highest-scoring list
             if (match == null)
                 match = lists.OrderByDescending(l => l.Score).FirstOrDefault();
 
@@ -111,6 +153,7 @@ namespace ArmaReforgerFeeder
             {
                 listPtr = match.ListPtr;
                 count = match.Count;
+                //Console.WriteLine($"[EntityListManager] Best single list for {targetType}: {match.Name} ({count} entities)");
                 return true;
             }
 
@@ -120,13 +163,12 @@ namespace ArmaReforgerFeeder
         }
 
         /// <summary>
-        /// Get the best general-purpose list (usually has characters).
+        /// Get the best general-purpose list (old behavior)
         /// </summary>
         public static bool TryGetBestList(ulong worldPtr, out ulong listPtr, out int count)
         {
             var lists = GetAllLists(worldPtr);
             
-            // Prefer character-dominant lists, fallback to highest score
             var best = lists.OrderByDescending(l => l.DominantType == EntityType.Character ? 1 : 0)
                            .ThenByDescending(l => l.Score)
                            .FirstOrDefault();
@@ -234,7 +276,6 @@ namespace ArmaReforgerFeeder
 
                         validCount++;
 
-                        // Classify entity
                         if (IsCharacterEntity(typeStr))
                             characterCount++;
                         else if (IsVehicleEntity(typeStr))
@@ -249,7 +290,6 @@ namespace ArmaReforgerFeeder
                 scatter.Execute();
             }
 
-            // Determine dominant type
             int maxCount = Math.Max(Math.Max(characterCount, vehicleCount), Math.Max(itemCount, genericCount));
             EntityType dominant = EntityType.Unknown;
             
@@ -262,10 +302,8 @@ namespace ArmaReforgerFeeder
             else if (maxCount == genericCount && genericCount > 0)
                 dominant = EntityType.Generic;
 
-            // Scoring formula
             int score = (characterCount * 10) + (vehicleCount * 8) + (itemCount * 6) - (genericCount * 3) - (invalidCount * 5);
             
-            // Bonus for good distribution
             if (validCount > 0)
             {
                 float validRatio = (float)validCount / entities.Length;
@@ -331,9 +369,6 @@ namespace ArmaReforgerFeeder
                    type.IndexOf("GameEntity", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        /// <summary>
-        /// Debug utility to print all discovered lists.
-        /// </summary>
         public static void DebugPrintAllLists(ulong worldPtr)
         {
             Console.WriteLine("[EntityListManager] Analyzing all candidates:");
@@ -347,6 +382,16 @@ namespace ArmaReforgerFeeder
             }
             
             Console.WriteLine($"\nTotal valid lists found: {lists.Length}");
+            
+            // Show combined totals
+            var allChars = GetAllEntitiesForType(worldPtr, EntityType.Character);
+            var allVehs = GetAllEntitiesForType(worldPtr, EntityType.Vehicle);
+            var allItems = GetAllEntitiesForType(worldPtr, EntityType.Item);
+            
+            Console.WriteLine($"\nCombined entity counts:");
+            Console.WriteLine($"  Characters: {allChars.Length}");
+            Console.WriteLine($"  Vehicles: {allVehs.Length}");
+            Console.WriteLine($"  Items: {allItems.Length}");
         }
     }
 }

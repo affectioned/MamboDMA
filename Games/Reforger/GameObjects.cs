@@ -168,7 +168,7 @@ namespace ArmaReforgerFeeder
             var ents = ReadEntityArray(list, count, take);
             if (ents.Length == 0) return Array.Empty<VehicleDto>();
 
-            Game.UpdateCamera();
+            //Game.UpdateCamera();
             var cam = Game.Camera.Position;
             float maxSq = MaxDrawDistance * MaxDrawDistance;
 
@@ -251,7 +251,7 @@ namespace ArmaReforgerFeeder
             var ents = ReadEntityArray(list, count, take);
             if (ents.Length == 0) return Array.Empty<ItemDto>();
 
-            Game.UpdateCamera();
+            //Game.UpdateCamera();
             var cam = Game.Camera.Position;
             float maxSq = MaxDrawDistance * MaxDrawDistance;
 

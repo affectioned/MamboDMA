@@ -272,51 +272,20 @@ namespace ArmaReforgerFeeder
             while (_run)
             {
                 sw.Restart();
-                Game.UpdateCamera();
+                //Game.UpdateCamera();
 
                 if (!DmaMemory.Read(DmaMemory.Base + Off.Game, out ulong game) || game == 0) goto SleepSlow;
                 if (!DmaMemory.Read(game + Off.GameWorld, out ulong gw) || gw == 0) goto SleepSlow;
 
                 string localFaction = TryGetLocalFaction(gw);
-
+                Console.WriteLine($"[DEBUG] game=0x{game:X}, gw=0x{gw:X}");
                 // NEW: Use EntityListManager for character-specific list
-                if (!EntityListManager.TryGetBestListForType(gw, EntityListManager.EntityType.Character, out ulong list, out int count))
-                {
-                    // Fallback to best general list
-                    if (!EntityListManager.TryGetBestList(gw, out list, out count))
-                    {
-                        ExchangeMeta(MetaSnapshot.Empty);
-                        goto SleepSlow;
-                    }
-                }
+                var ents = EntityListManager.GetAllEntitiesForType(gw, EntityListManager.EntityType.Character, MaxEntitiesToScan);
 
-                if (list == 0 || count <= 0)
-                {
-                    ExchangeMeta(MetaSnapshot.Empty);
-                    goto SleepSlow;
-                }
-
-                ulong[] ents;
-                if (count <= MaxEntitiesToScan)
-                {
-                    ents = DmaMemory.ReadArray<ulong>(list, count) ?? Array.Empty<ulong>();
-                }
-                else
-                {
-                    int take = MaxEntitiesToScan;
-                    ents = new ulong[take];
-                    double stride = (double)count / take;
-                    using var samp = DmaMemory.Scatter();
-                    var r = samp.AddRound(useCache: false);
-                    for (int i = 0; i < take; i++)
-                    {
-                        int srcIndex = (int)(i * stride);
-                        if (srcIndex >= count) srcIndex = count - 1;
-                        int idx = i;
-                        r[idx].AddValueEntry<ulong>(0, list + (ulong)(srcIndex * 8));
-                        r[idx].Completed += (_, cb) => cb.TryGetValue<ulong>(0, out ents[idx]);
-                    }
-                    samp.Execute();
+                if (ents.Length == 0) 
+                { 
+                    ExchangeMeta(MetaSnapshot.Empty); 
+                    goto SleepSlow; 
                 }
 
                 if (ents.Length == 0) { ExchangeMeta(MetaSnapshot.Empty); goto SleepSlow; }
@@ -572,7 +541,7 @@ namespace ArmaReforgerFeeder
                 ExchangeMeta(new MetaSnapshot(entsOut, typesOut, factionsOut, hitZoneOut, namesOut));
 
                 if (DebugLogSlow && ((dbgTick++ & 0x1F) == 0))
-                    Console.WriteLine($"[Players/Slow] world={count} kept={keep.Count} final={final.Count} fov={Game.Camera.Fov:0.0}");
+                    Console.WriteLine($"[Players/Slow] kept={keep.Count} final={final.Count} fov={Game.Camera.Fov:0.0}");
 
             SleepSlow:
                 var spent = (int)sw.ElapsedMilliseconds;

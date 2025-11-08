@@ -71,7 +71,7 @@ namespace MamboDMA.Games.Reforger
         {
             if (!DmaMemory.IsAttached) return;
 
-            Game.UpdateCamera();
+            //Game.UpdateCamera();
 
             // Sync ALL config to runtime
             var cfg = Cfg;
@@ -91,10 +91,10 @@ namespace MamboDMA.Games.Reforger
             Players.SkeletonLevel = (Players.SkeletonDetail)cfg.SkeletonLevel;
             Players.SkeletonThickness = cfg.SkeletonThickness;
 
-            // GameObjects - CRITICAL: Sync Hz settings!
+            // GameObjects
             GameObjects.MaxDrawDistance = cfg.MaxDrawDistance;
-            GameObjects.VehiclesHz = cfg.VehiclesHz;  // This was missing!
-            GameObjects.ItemsHz = cfg.ItemsHz;        // This was missing!
+            GameObjects.VehiclesHz = cfg.VehiclesHz;
+            GameObjects.ItemsHz = cfg.ItemsHz;
 
             Players.PublishLatestToUI();
 
@@ -195,6 +195,13 @@ namespace MamboDMA.Games.Reforger
                 : "Not connected";
             
             DrawStatusIndicator(statusColor, statusText);
+            
+            // Display scope status
+            if (attached)
+            {
+                ImGui.SameLine();
+                ImGui.Text($"| Scoped: {(Game.Camera.IsScoped ? "YES" : "NO")}");
+            }
         }
 
         private void DrawPlayersTab(ReforgerConfig cfg)
@@ -212,6 +219,11 @@ namespace MamboDMA.Games.Reforger
             ImGui.Checkbox("Show weapon", ref cfg.ShowWeapon);
             ImGui.SameLine();
             ImGui.Checkbox("Show distance", ref cfg.ShowDistance);
+            
+            // DEAD BODY MARKER TOGGLE
+            ImGui.Checkbox("Dead body markers", ref cfg.ShowDeadMarkers);
+            ImGui.SameLine();
+            ImGui.ColorEdit4("##DeadColor", ref cfg.DeadMarkerColor, ImGuiColorEditFlags.NoInputs);
 
             ImGui.Spacing();
             ImGui.TextColored(new Vector4(0.4f, 0.8f, 1f, 1f), "Box Adjustments");
@@ -333,6 +345,8 @@ namespace MamboDMA.Games.Reforger
             ImGui.BulletText($"Vehicles: {_vehicles.Length}");
             ImGui.BulletText($"Items: {_items.Length}");
             ImGui.BulletText($"Camera FOV: {Game.Camera.Fov:F1}°");
+            ImGui.BulletText($"Scoped: {(Game.Camera.IsScoped ? "YES" : "NO")}");
+            ImGui.BulletText($"Zoom Factor: {Game.Camera.ZoomIncreaseFactor.X:F2}x");
             ImGui.BulletText($"Camera Pos: ({Game.Camera.Position.X:F1}, {Game.Camera.Position.Y:F1}, {Game.Camera.Position.Z:F1})");
             ImGui.BulletText($"Screen: {Game.Screen.W}x{Game.Screen.H}");
         }
@@ -386,14 +400,39 @@ namespace MamboDMA.Games.Reforger
             var dl = ImGui.GetForegroundDrawList();
             var cfg = Cfg;
 
-            if (cfg.DrawBoxes)
+            foreach (var a in list)
             {
-                uint colBox = ImGui.GetColorU32(cfg.BoxColor);
-                uint colShadow = ImGui.GetColorU32(cfg.BoxShadowColor);
-
-                foreach (var a in list)
+                // DEAD BODY MARKER - Show before other elements
+                if (a.IsDead && cfg.ShowDeadMarkers)
+                {
+                    if (!Game.WorldToScreen(a.HeadWorld, out float sx, out float sy)) continue;
+                    
+                    uint deadCol = ImGui.GetColorU32(cfg.DeadMarkerColor);
+                    uint deadShadow = ImGui.GetColorU32(new Vector4(0, 0, 0, 0.7f));
+                    
+                    // Draw skull/cross symbol
+                    float size = 16f;
+                    dl.AddCircle(new Vector2(sx + 1, sy + 1), size, deadShadow, 12, 2.5f);
+                    dl.AddCircle(new Vector2(sx, sy), size, deadCol, 12, 2f);
+                    
+                    // X marks the dead
+                    float x = size * 0.4f;
+                    dl.AddLine(new Vector2(sx - x + 1, sy - x + 1), new Vector2(sx + x + 1, sy + x + 1), deadShadow, 2.5f);
+                    dl.AddLine(new Vector2(sx + x + 1, sy - x + 1), new Vector2(sx - x + 1, sy + x + 1), deadShadow, 2.5f);
+                    dl.AddLine(new Vector2(sx - x, sy - x), new Vector2(sx + x, sy + x), deadCol, 2f);
+                    dl.AddLine(new Vector2(sx + x, sy - x), new Vector2(sx - x, sy + x), deadCol, 2f);
+                    
+                    // Label
+                    DrawLabel(dl, "DEAD", cfg.DeadMarkerColor, sy + size + 4f, sx - 20f, 40f, new Vector4(0, 0, 0, 0.8f));
+                    
+                    continue; // Skip normal rendering for dead bodies
+                }
+                
+                // NORMAL RENDERING (alive players)
+                if (cfg.DrawBoxes)
                 {
                     if (a.Bones == null || a.Bones.Length == 0) continue;
+                    
                     float minX = a.Bones.Min(b => b.X);
                     float maxX = a.Bones.Max(b => b.X);
                     float minY = a.Bones.Min(b => b.Y);
@@ -403,6 +442,9 @@ namespace MamboDMA.Games.Reforger
                     float y = minY - cfg.HeadTopOffsetPx;
                     float w = (maxX - minX);
                     float h = (maxY - minY) + cfg.BoxHeightOffsetPx;
+
+                    uint colBox = ImGui.GetColorU32(cfg.BoxColor);
+                    uint colShadow = ImGui.GetColorU32(cfg.BoxShadowColor);
 
                     dl.AddRect(new Vector2(x - 1, y - 1), new Vector2(x + w + 1, y + h + 1), colShadow, 0, ImDrawFlags.None, cfg.BoxOutlineThick + 1f);
                     dl.AddRect(new Vector2(x, y), new Vector2(x + w, y + h), colBox, 0, ImDrawFlags.None, cfg.BoxOutlineThick);
@@ -417,12 +459,18 @@ namespace MamboDMA.Games.Reforger
                         dl.AddRectFilled(new Vector2(bx, y + (h - bh)), new Vector2(bx + cfg.HpBarWidthPx, y + h), hpCol);
                     }
 
-                    if (cfg.ShowName && !string.IsNullOrWhiteSpace(a.Name)) DrawLabel(dl, a.Name, cfg.NameColor, y - 18f, x, w, cfg.LabelShadow);
-                    if (cfg.ShowWeapon && Players.TryGetEquippedWeapon(a.Ptr, out var gun)) DrawLabel(dl, gun, cfg.WeaponColor, y + h + 4f, x, w, cfg.LabelShadow);
-                    if (cfg.ShowDistance) DrawLabel(dl, $"{a.Distance}m", cfg.DistanceColor, y + h + 20f, x, w, cfg.LabelShadow);
+                    if (cfg.ShowName && !string.IsNullOrWhiteSpace(a.Name)) 
+                        DrawLabel(dl, a.Name, cfg.NameColor, y - 18f, x, w, cfg.LabelShadow);
+                    
+                    if (cfg.ShowWeapon && Players.TryGetEquippedWeapon(a.Ptr, out var gun)) 
+                        DrawLabel(dl, gun, cfg.WeaponColor, y + h + 4f, x, w, cfg.LabelShadow);
+                    
+                    if (cfg.ShowDistance) 
+                        DrawLabel(dl, $"{a.Distance}m", cfg.DistanceColor, y + h + 20f, x, w, cfg.LabelShadow);
                 }
             }
 
+            // SKELETONS (draw after boxes)
             if (Players.EnableSkeletons)
             {
                 uint colSkel = ImGui.GetColorU32(Cfg.SkelColor);
@@ -432,7 +480,9 @@ namespace MamboDMA.Games.Reforger
 
                 foreach (var a in list)
                 {
+                    if (a.IsDead) continue; // Don't draw skeletons for dead
                     if (!(a.HasBones && a.Bones != null)) continue;
+                    
                     for (int e = 0; e < edges.Length; e++)
                     {
                         var (A, B) = edges[e];
@@ -456,7 +506,6 @@ namespace MamboDMA.Games.Reforger
 
             foreach (var v in list)
             {
-                // Filter by user settings
                 bool show = true;
                 if (v.Name.Contains("Truck", StringComparison.OrdinalIgnoreCase) || 
                     v.Name.Contains("Car", StringComparison.OrdinalIgnoreCase))
@@ -472,9 +521,8 @@ namespace MamboDMA.Games.Reforger
 
                 if (!Game.WorldToScreen(v.Position, out float sx, out float sy)) continue;
                 
-                string caption = $"{v.Name} [{v.Distance}m]";
-                uint col = ImGui.GetColorU32(new Vector4(0.2f, 0.8f, 1f, 1f));
-                dl.AddText(new Vector2(sx, sy), col, caption);
+                string caption = $"[V] {v.Name} [{v.Distance}m]";
+                DrawLabel(dl, caption, new Vector4(0.2f, 0.8f, 1f, 1f), sy, sx - 50f, 100f, new Vector4(0, 0, 0, 0.7f));
             }
         }
 
@@ -492,16 +540,26 @@ namespace MamboDMA.Games.Reforger
                 {
                     "Weapon" => cfg.ShowItemsWeapons,
                     "Magazine" => cfg.ShowItemsAmmo,
-                    "Item" => cfg.ShowItemsMisc,
-                    _ => false
+                    "Item" => cfg.ShowItemsEquipment,
+                    _ => cfg.ShowItemsMisc
                 };
                 
                 if (!show) continue;
                 if (!Game.WorldToScreen(it.Position, out float sx, out float sy)) continue;
                 
-                string caption = $"{it.Name} [{it.Distance}m]";
-                uint col = ImGui.GetColorU32(new Vector4(1f, 1f, 0f, 1f));
-                dl.AddText(new Vector2(sx, sy), col, caption);
+                // Check if item is carried
+                bool carried = Players.IsItemCarried(it.Ptr, it.Position, it.Kind, it.Name, out _);
+                if (carried) continue; // Don't draw carried items
+                
+                Vector4 color = it.Kind switch
+                {
+                    "Weapon" => new Vector4(1f, 0.3f, 0.3f, 1f),
+                    "Magazine" => new Vector4(1f, 1f, 0.3f, 1f),
+                    _ => new Vector4(0.7f, 0.7f, 0.7f, 1f)
+                };
+                
+                string caption = $"[{it.Kind[0]}] {it.Name} [{it.Distance}m]";
+                DrawLabel(dl, caption, color, sy, sx - 60f, 120f, new Vector4(0, 0, 0, 0.7f));
             }
         }
 

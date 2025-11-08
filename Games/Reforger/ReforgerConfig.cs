@@ -12,6 +12,7 @@ namespace MamboDMA.Games.Reforger
         public bool ShowName = true;
         public bool ShowWeapon = true;
         public bool ShowDistance = true;
+        public bool ShowDeadMarkers = true;
 
         // ───── ESP Layout ─────
         public float BoxWidthOffsetPx = 0f;
@@ -30,13 +31,14 @@ namespace MamboDMA.Games.Reforger
         public Vector4 HpTextColor = new(1f, 0.86f, 0.63f, 1f);
         public Vector4 SkelColor = new(1f, 1f, 1f, 1f);
         public Vector4 SkelShadowColor = new(0, 0, 0, 0.55f);
+        public Vector4 DeadMarkerColor = new(1f, 0.3f, 0.3f, 1f);
 
         // ───── Player Filters ─────
         public bool IncludeFriendlies = false;
         public bool OnlyPlayersFromManager = false;
         public bool RequireHitZones = false;
         public bool IncludeRagdolls = false;
-        public bool AnimatedOnly = true;
+        public bool AnimatedOnly = false;
 
         // ───── Performance / Loops ─────
         public float MaxDrawDistance = 500f;
