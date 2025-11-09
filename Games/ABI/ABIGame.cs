@@ -500,7 +500,7 @@ namespace MamboDMA.Games.ABI
                 ImGui.End();
                 return;
             }
-
+        
             // Menu bar (filter + refresh info)
             if (ImGui.BeginMenuBar())
             {
@@ -510,27 +510,40 @@ namespace MamboDMA.Games.ABI
                 ImGui.InputText("##loot_filter", ref _lootFilter, 128);
                 ImGui.SameLine();
                 if (ImGui.Button("Clear")) _lootFilter = "";
+                
+                // ADD DEBUG TOGGLE
+                ImGui.SameLine();
+                if (ImGui.Button(ABILoot.EnableDebugLogging ? "Disable Debug" : "Enable Debug"))
+                    ABILoot.EnableDebugLogging = !ABILoot.EnableDebugLogging;
+                
                 ImGui.EndMenuBar();
             }
-
+        
             if (!ABILoot.TryGetLoot(out var frame) || frame.Items == null)
             {
                 ImGui.TextDisabled("No loot data yet.");
                 ImGui.End();
                 return;
             }
-
+        
+            // ADD MORE DETAILED STATUS
             ImGui.TextDisabled($"Seen Actors: {frame.TotalActorsSeen} ¡¤ Containers: {frame.ContainersFound} (expanded {frame.ContainersExpanded}) ¡¤ Items total: {frame.Items.Count}");
+            
+            // Count items in containers vs ground
+            int itemsInContainers = frame.Items.Count(x => x.InContainer);
+            int itemsOnGround = frame.Items.Count - itemsInContainers;
+            ImGui.TextDisabled($"Items: {itemsInContainers} in containers, {itemsOnGround} on ground");
+            
             ImGui.Separator();
-
+        
             var items = frame.Items;
             string filter = _lootFilter?.Trim() ?? "";
             bool useFilter = filter.Length >= 2;
-
+        
             // Group by container
             var ground = new List<ABILoot.Item>(256);
             var byContainer = new Dictionary<ulong, List<ABILoot.Item>>(64);
-
+        
             foreach (var it in items)
             {
                 if (useFilter)
@@ -539,7 +552,7 @@ namespace MamboDMA.Games.ABI
                        || it.Label?.Contains(filter, StringComparison.OrdinalIgnoreCase) == true))
                         continue;
                 }
-
+        
                 if (!it.InContainer || it.ContainerActor == 0)
                 {
                     ground.Add(it);
@@ -554,78 +567,87 @@ namespace MamboDMA.Games.ABI
                     list.Add(it);
                 }
             }
-
+        
             // Containers section
-            if (ImGui.CollapsingHeader($"Containers ({frame.ContainersFound})", ImGuiTreeNodeFlags.DefaultOpen))
+            if (ImGui.CollapsingHeader($"Containers ({byContainer.Count} with items)", ImGuiTreeNodeFlags.DefaultOpen))
             {
-                var contKeys = new List<ulong>(byContainer.Keys);
-                contKeys.Sort((a, b) =>
+                if (byContainer.Count == 0)
                 {
-                    var pa = GetActorWorldPos(a);
-                    var pb = GetActorWorldPos(b);
-                    var loc = Players.LocalPosition;
-                    float da = Vector3.DistanceSquared(loc, pa);
-                    float db = Vector3.DistanceSquared(loc, pb);
-                    return da.CompareTo(db);
-                });
-
-                foreach (var cont in contKeys)
+                    ImGui.TextDisabled("No containers with items found. Enable debug logging to see why.");
+                }
+                else
                 {
-                    string cname = GetActorClassName(cont);
-                    var cpos = GetActorWorldPos(cont);
-                    string cposStr = $"{cpos.X:F0}, {cpos.Y:F0}, {cpos.Z:F0}";
-                    var list = byContainer[cont];
-
-                    bool open = ImGui.TreeNodeEx($"0x{cont:X}  {cname}  ({list.Count})###cont_{cont}",
-                                                 ImGuiTreeNodeFlags.SpanFullWidth);
-                    ImGui.SameLine();
-                    ImGui.TextDisabled($"pos: {cposStr}");
-
-                    if (open)
+                    var contKeys = new List<ulong>(byContainer.Keys);
+                    contKeys.Sort((a, b) =>
                     {
-                        if (ImGui.BeginTable($"tbl_cont_{cont}", 6,
-                                ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY,
-                                new Vector2(-1, Math.Min(280, 24 * (list.Count + 1)))))
+                        var pa = GetActorWorldPos(a);
+                        var pb = GetActorWorldPos(b);
+                        var loc = Players.LocalPosition;
+                        float da = Vector3.DistanceSquared(loc, pa);
+                        float db = Vector3.DistanceSquared(loc, pb);
+                        return da.CompareTo(db);
+                    });
+        
+                    foreach (var cont in contKeys)
+                    {
+                        string cname = GetActorClassName(cont);
+                        var cpos = GetActorWorldPos(cont);
+                        string cposStr = $"{cpos.X:F0}, {cpos.Y:F0}, {cpos.Z:F0}";
+                        var list = byContainer[cont];
+        
+                        bool open = ImGui.TreeNodeEx($"0x{cont:X}  {cname}  ({list.Count})###cont_{cont}",
+                                                     ImGuiTreeNodeFlags.SpanFullWidth);
+                        ImGui.SameLine();
+                        ImGui.TextDisabled($"pos: {cposStr}");
+        
+                        if (open)
                         {
-                            ImGui.TableSetupScrollFreeze(0, 1);
-                            ImGui.TableSetupColumn("Class", ImGuiTableColumnFlags.WidthStretch);
-                            ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthStretch);
-                            ImGui.TableSetupColumn("Stack", ImGuiTableColumnFlags.WidthFixed, 48);
-                            ImGui.TableSetupColumn("Price", ImGuiTableColumnFlags.WidthFixed, 80);
-                            ImGui.TableSetupColumn("Actor", ImGuiTableColumnFlags.WidthFixed, 140);
-                            ImGui.TableSetupColumn("Pos (X,Y,Z)", ImGuiTableColumnFlags.WidthFixed, 210);
-                            ImGui.TableHeadersRow();
-
-                            list.Sort((x, y) =>
+                            if (ImGui.BeginTable($"tbl_cont_{cont}", 6,
+                                    ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY,
+                                    new Vector2(-1, Math.Min(280, 24 * (list.Count + 1)))))
                             {
-                                int r = string.Compare(x.Label, y.Label, StringComparison.OrdinalIgnoreCase);
-                                if (r != 0) return r;
-                                return string.Compare(x.ClassName, y.ClassName, StringComparison.OrdinalIgnoreCase);
-                            });
-
-                            foreach (ref readonly var it in CollectionsMarshal.AsSpan(list))
-                            {
-                                var p = it.Position;
-                                string posStr = $"{p.X:F0}, {p.Y:F0}, {p.Z:F0}";
-
-                                ImGui.TableNextRow();
-                                ImGui.TableSetColumnIndex(0); ImGui.TextUnformatted(it.ClassName ?? "");
-                                ImGui.TableSetColumnIndex(1); ImGui.TextUnformatted(it.Label ?? "");
-                                ImGui.TableSetColumnIndex(2); ImGui.TextUnformatted(it.Stack.ToString());
-                                ImGui.TableSetColumnIndex(3); ImGui.TextUnformatted(it.ApproxPrice > 0 ? it.ApproxPrice.ToString() : "-");
-                                ImGui.TableSetColumnIndex(4); ImGui.TextUnformatted($"0x{it.Actor:X}");
-                                ImGui.TableSetColumnIndex(5); ImGui.TextUnformatted(posStr);
+                                ImGui.TableSetupScrollFreeze(0, 1);
+                                ImGui.TableSetupColumn("Class", ImGuiTableColumnFlags.WidthStretch);
+                                ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthStretch);
+                                ImGui.TableSetupColumn("Stack", ImGuiTableColumnFlags.WidthFixed, 48);
+                                ImGui.TableSetupColumn("Price", ImGuiTableColumnFlags.WidthFixed, 80);
+                                ImGui.TableSetupColumn("Actor", ImGuiTableColumnFlags.WidthFixed, 140);
+                                ImGui.TableSetupColumn("Pos (X,Y,Z)", ImGuiTableColumnFlags.WidthFixed, 210);
+                                ImGui.TableHeadersRow();
+        
+                                list.Sort((x, y) =>
+                                {
+                                    int r = string.Compare(x.Label, y.Label, StringComparison.OrdinalIgnoreCase);
+                                    if (r != 0) return r;
+                                    return string.Compare(x.ClassName, y.ClassName, StringComparison.OrdinalIgnoreCase);
+                                });
+        
+                                foreach (ref readonly var it in CollectionsMarshal.AsSpan(list))
+                                {
+                                    var p = it.Position;
+                                    string posStr = $"{p.X:F0}, {p.Y:F0}, {p.Z:F0}";
+        
+                                    ImGui.TableNextRow();
+                                    ImGui.TableSetColumnIndex(0); ImGui.TextUnformatted(it.ClassName ?? "");
+                                    ImGui.TableSetColumnIndex(1); ImGui.TextUnformatted(it.Label ?? "");
+                                    ImGui.TableSetColumnIndex(2); ImGui.TextUnformatted(it.Stack.ToString());
+                                    ImGui.TableSetColumnIndex(3); ImGui.TextUnformatted(it.ApproxPrice > 0 ? it.ApproxPrice.ToString() : "-");
+                                    ImGui.TableSetColumnIndex(4); ImGui.TextUnformatted($"0x{it.Actor:X}");
+                                    ImGui.TableSetColumnIndex(5); ImGui.TextUnformatted(posStr);
+                                }
+        
+                                ImGui.EndTable();
                             }
-
-                            ImGui.EndTable();
+        
+                            ImGui.TreePop();
                         }
-
-                        ImGui.TreePop();
                     }
                 }
             }
-
+        
             ImGui.Separator();
+
+
 
             // Ground loot section
             if (ImGui.CollapsingHeader($"Ground Loot ({ground.Count})", ImGuiTreeNodeFlags.DefaultOpen))

@@ -52,6 +52,12 @@
   let mapImg = new Image();
   let imgPan = { x:0, y:0 };
 
+  // --------- CALIBRATION STATE ---------
+  let currentSession = null;
+  let calibrationOffset = { x: 0, y: 0 };
+  let isCalibrated = false;
+  let calibrationMode = false;
+
   // --------- Per-map config ---------
   const cfgKey = (name)=> `wr.mapcfg.${name}`;
   const defaultCfg = ()=> ({
@@ -149,6 +155,7 @@
     const cfg = activeMap ? loadCfg(activeMap.name) : defaultCfg();
     const z = clamp(parseFloat(zoomEl?.value ?? cfg.zoom) || cfg.zoom, 0.05, 10);
     const scl = Math.max(0.001, parseFloat(inScaleEl?.value ?? cfg.inScale) || cfg.inScale);
+    
     return {
       zoom: z,
       canvasW: CANVAS.width,
@@ -159,8 +166,57 @@
       imgH: mapImg.naturalHeight || 1,
       inScale: scl,
       yFlip: cfg.yFlip,
-      worldOffsetCm: cfg.worldOffsetCm
+      worldOffsetCm: { x: calibrationOffset.x, y: calibrationOffset.y }
     };
+  }
+
+  // --------- CLICK-TO-CALIBRATE ---------
+  function enterCalibrationMode(){
+    calibrationMode = true;
+    statusFlash("Click your position on the map to calibrate");
+    CANVAS.style.cursor = "crosshair";
+    console.log("[WebRadar] Calibration mode: Click where you are on the map");
+  }
+
+  function exitCalibrationMode(){
+    calibrationMode = false;
+    CANVAS.style.cursor = "grab";
+    statusFlash("Calibration mode exited");
+  }
+
+  function calibrateFromClick(clickImgX, clickImgY){
+    if (!lastFrame || !lastFrame.self) {
+      statusFlash("No player data - wait for connection");
+      return;
+    }
+    
+    const cfg = activeMap ? loadCfg(activeMap.name) : defaultCfg();
+    const scale = cfg.inScale;
+    
+    // User clicked at (clickImgX, clickImgY) saying "I am here"
+    // We know player world position from lastFrame.self
+    // Calculate offset: (worldPos + offset) / scale = clickImg
+    // offset = clickImg * scale - worldPos
+    
+    let offsetX = clickImgX * scale - lastFrame.self.x;
+    let offsetY = clickImgY * scale - lastFrame.self.y;
+    
+    if (cfg.yFlip) {
+      offsetY = -(clickImgY * scale) - lastFrame.self.y;
+    }
+    
+    calibrationOffset.x = offsetX;
+    calibrationOffset.y = offsetY;
+    isCalibrated = true;
+    
+    console.log(`[WebRadar] Calibrated by click:`);
+    console.log(`  World pos: (${lastFrame.self.x.toFixed(0)}, ${lastFrame.self.y.toFixed(0)})`);
+    console.log(`  Clicked image pos: (${clickImgX.toFixed(0)}, ${clickImgY.toFixed(0)})`);
+    console.log(`  Offset: (${offsetX.toFixed(0)}, ${offsetY.toFixed(0)})`);
+    
+    statusFlash(`calibrated to (${clickImgX.toFixed(0)}, ${clickImgY.toFixed(0)})`);
+    exitCalibrationMode();
+    drawFrame(lastFrame);
   }
 
   // --------- Mapping math ---------
@@ -224,6 +280,34 @@
     for (let y=0; y<=CANVAS.height; y+=step){ CTX.beginPath(); CTX.moveTo(0,y); CTX.lineTo(CANVAS.width,y); CTX.stroke(); }
   }
 
+  function drawDebugInfo(frame, v){
+    if (!frame || !frame.self) return;
+    
+    const cfg = activeMap ? loadCfg(activeMap.name) : defaultCfg();
+    const imgPos = worldToImagePx(frame.self.x, frame.self.y, v);
+    
+    CTX.fillStyle = "rgba(0, 0, 0, 0.75)";
+    CTX.fillRect(10*dpr, 10*dpr, 420*dpr, 200*dpr);
+    
+    CTX.fillStyle = "#00ff00";
+    CTX.font = `${12*dpr}px monospace`;
+    let y = 25*dpr;
+    const line = (txt) => { CTX.fillText(txt, 15*dpr, y); y += 15*dpr; };
+    
+    line(`Session: 0x${(currentSession || 0).toString(16)}`);
+    line(`World Pos: (${frame.self.x.toFixed(0)}, ${frame.self.y.toFixed(0)})`);
+    line(`Image Pos: (${imgPos[0].toFixed(1)}, ${imgPos[1].toFixed(1)}) px`);
+    line(`Image Size: ${v.imgW}x${v.imgH} px`);
+    line(`Scale: ${v.inScale} cm/px`);
+    line(`Y-Flip: ${v.yFlip}`);
+    line(`Offset: (${v.worldOffsetCm.x.toFixed(0)}, ${v.worldOffsetCm.y.toFixed(0)})`);
+    line(`Calibrated: ${isCalibrated ? 'YES' : 'NO'}`);
+    line(`Pan: (${imgPan.x.toFixed(0)}, ${imgPan.y.toFixed(0)})`);
+    line(`Zoom: ${v.zoom.toFixed(2)}`);
+    line(`Actors: ${(frame.actors || []).length}`);
+    line(`Press 'C' to calibrate | 'R' to reset`);
+  }
+
   function drawFrame(frame){
     try{
       CTX.setTransform(1,0,0,1,0,0);
@@ -239,6 +323,17 @@
       CTX.drawImage(mapImg, 0,0, v.imgW,v.imgH, R.dx, R.dy, R.dw, R.dh);
 
       if (frame && frame.ok === true){
+        // --------- SESSION DETECTION ---------
+        if (frame.session && frame.session !== currentSession) {
+          console.log(`[WebRadar] New session detected: 0x${frame.session.toString(16)}`);
+          currentSession = frame.session;
+          isCalibrated = false;
+          calibrationOffset = { x: 0, y: 0 };
+          imgPan = { x: 0, y: 0 };
+          // Auto-enter calibration mode on new session
+          setTimeout(()=> enterCalibrationMode(), 500);
+        }
+
         const showSelf = !!(fSelfEl?.checked);
         const showPMCs = !!(fPMCsEl?.checked);
         const showBots = !!(fBotsEl?.checked);
@@ -292,6 +387,30 @@
             else       { if (!showPMCs) continue; drawEntityCircleWithHeading(x,y,rPMC, yaw, cPMC, altArrow); }
           }
         }
+        
+        // Draw debug overlay
+        drawDebugInfo(frame, v);
+        
+        // Draw calibration prompt
+        if (!isCalibrated || calibrationMode) {
+          CTX.fillStyle = "rgba(0, 0, 0, 0.85)";
+          CTX.fillRect(CANVAS.width/2 - 280*dpr, CANVAS.height/2 - 50*dpr, 560*dpr, 100*dpr);
+          
+          CTX.fillStyle = "#ffcc00";
+          CTX.font = `bold ${20*dpr}px sans-serif`;
+          CTX.textAlign = "center";
+          CTX.fillText("CALIBRATION MODE", CANVAS.width/2, CANVAS.height/2 - 15*dpr);
+          
+          CTX.font = `${15*dpr}px sans-serif`;
+          CTX.fillStyle = "#ffffff";
+          CTX.fillText("Click on the map where you are currently located", CANVAS.width/2, CANVAS.height/2 + 15*dpr);
+          
+          CTX.font = `${13*dpr}px sans-serif`;
+          CTX.fillStyle = "#aaaaaa";
+          CTX.fillText("Press ESC to cancel | Press C to toggle", CANVAS.width/2, CANVAS.height/2 + 35*dpr);
+          
+          CTX.textAlign = "left";
+        }
       }
     } catch (err){
       console.warn("[WebRadar] draw error:", err);
@@ -312,6 +431,9 @@
 
   function loadMapImage(fileOrUrl){
     imgPan.x = 0; imgPan.y = 0;
+    isCalibrated = false;
+    calibrationOffset = { x: 0, y: 0 };
+    
     mapImg = new Image();
     mapImg.onload  = ()=> drawFrame(lastFrame);
     mapImg.onerror = ()=> { console.warn("[WebRadar] failed to load", fileOrUrl); drawFrame(lastFrame); };
@@ -478,28 +600,86 @@
 
   // --------- Interaction ---------
   let isDragging=false, dragStart={x:0,y:0}, panStart={x:0,y:0};
-  CANVAS.addEventListener("mousedown", (e)=>{ isDragging=true; CANVAS.classList.add("dragging"); dragStart=clientToCanvas(e); panStart={...imgPan}; });
-  window.addEventListener("mouseup", ()=>{ if (isDragging){ isDragging=false; CANVAS.classList.remove("dragging"); }});
+  
+  CANVAS.addEventListener("mousedown", (e)=>{
+    if (calibrationMode) return; // Don't drag in calibration mode
+    isDragging=true; 
+    CANVAS.classList.add("dragging"); 
+    dragStart=clientToCanvas(e); 
+    panStart={...imgPan};
+  });
+
+  CANVAS.addEventListener("click", (e)=>{
+    if (!calibrationMode) return;
+    
+    // Convert click to image coordinates
+    const canvasPos = clientToCanvas(e);
+    const v = readView();
+    const R = imageDrawRect(v);
+    
+    // Canvas coords to image coords
+    const imgX = (canvasPos.x - R.dx) / R.s;
+    const imgY = (canvasPos.y - R.dy) / R.s;
+    
+    // Bounds check
+    if (imgX < 0 || imgX > v.imgW || imgY < 0 || imgY > v.imgH) {
+      statusFlash("Click on the map, not outside it!");
+      return;
+    }
+    
+    calibrateFromClick(imgX, imgY);
+  });
+
+  window.addEventListener("mouseup", ()=>{ 
+    if (isDragging){ 
+      isDragging=false; 
+      CANVAS.classList.remove("dragging"); 
+    }
+  });
+
   window.addEventListener("mousemove", (e)=>{
-    if (!isDragging) return;
+    if (!isDragging || calibrationMode) return;
     const cur = clientToCanvas(e);
     imgPan.x = panStart.x + (cur.x - dragStart.x);
     imgPan.y = panStart.y + (cur.y - dragStart.y);
     drawFrame(lastFrame);
   });
+
   CANVAS.addEventListener("wheel", (e)=>{
     e.preventDefault();
+    if (calibrationMode) return; // Don't zoom in calibration mode
     const z = clamp((parseFloat(zoomEl.value)||0.5) * (e.deltaY < 0 ? 1.1 : 0.9), 0.25, 10);
     zoomEl.value = z.toFixed(2);
     persistUIToCfg();
     drawFrame(lastFrame);
   }, { passive:false });
 
+  // --------- Keyboard shortcuts ---------
+  window.addEventListener("keydown", (e)=>{
+    if (e.key === "c" || e.key === "C") {
+      if (calibrationMode) exitCalibrationMode();
+      else enterCalibrationMode();
+      drawFrame(lastFrame);
+    }
+    if (e.key === "Escape") {
+      if (calibrationMode) {
+        exitCalibrationMode();
+        drawFrame(lastFrame);
+      }
+    }
+    if (e.key === "r" || e.key === "R") {
+      // Force recalibration
+      isCalibrated = false;
+      calibrationOffset = { x: 0, y: 0 };
+      enterCalibrationMode();
+      console.log("[WebRadar] Reset calibration - click to recalibrate");
+    }
+  });
+
   // --------- Toolbar UX ---------
   collapseBtn?.addEventListener("click", ()=>{
     const collapsed = toolbarEl.classList.toggle("collapsed");
     collapseBtn.textContent = collapsed ? "?" : "?";
-    // Force a canvas resize because the grid row height changed
     resizeCanvas();
     drawFrame(lastFrame);
   });
@@ -512,7 +692,6 @@
       Object.entries(tabPages).forEach(([k,el])=>{
         if (k === key) el.classList.add("active"); else el.classList.remove("active");
       });
-      // Canvas size unaffected, but redraw for UX
       drawFrame(lastFrame);
     });
   });
@@ -532,8 +711,13 @@
   }
 
   // utils
-  function clientToCanvas(e){ const r = CANVAS.getBoundingClientRect(); return { x:(e.clientX - r.left)*dpr, y:(e.clientY - r.top)*dpr }; }
+  function clientToCanvas(e){ 
+    const r = CANVAS.getBoundingClientRect(); 
+    return { x:(e.clientX - r.left)*dpr, y:(e.clientY - r.top)*dpr }; 
+  }
+  
   function clamp(v,lo,hi){ return Math.max(lo, Math.min(hi, v)); }
+  
   function statusFlash(txt){
     if (!statusEl) return;
     statusEl.textContent = txt;
