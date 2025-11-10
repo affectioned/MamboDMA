@@ -8,21 +8,34 @@ namespace MamboDMA.Games.CS2
 {
     public static class CS2Offsets
     {
-        // Module: client.dll
         // namespace CS2Dumper.Offsets 
-        public const ulong dwEntityList = 0x1D0C9F8;
+        // Module: client.dll
+        public const ulong dwEntityList = 0x1D0FBE8;
+        public const ulong dwLocalPlayerController = 0x1E19AD0;
+        public const ulong dwLocalPlayerPawn = 0x1BEAEB8;
 
-        // namespace CS2Dumper.Schemas {
+        // namespace CS2Dumper.Schemas
         // Module: client.dll
         // Class count: 490
         // Enum count: 8
         // public static class ClientDll
-        // Parent: C_BaseEntity
-        // public static class CCSPlayerController
-        public const ulong m_hPlayerPawn = 0x8FC; // CHandle<C_CSPlayerPawn>
-        // public static class C_BaseEntity
-        public const ulong m_iHealth = 0x34C; // int32
+        // public static class CBasePlayerController 
+        public const ulong m_hPawn = 0x6B4; // CHandle<C_BasePlayerPawn>
+
         // public static class CBasePlayerController
         public const ulong m_iszPlayerName = 0x6E8; // char[128]
+
+        // public static class C_BaseEntity
+        public const ulong m_lifeState = 0x354; // uint8
+
+        // public static class C_BaseEntity
+        public const ulong m_iHealth = 0x34C; // int32
+
+        // public static class C_BaseEntity
+        public const ulong m_iTeamNum = 0x3EB; // uint8
+
+        // public static class C_BasePlayerPawn
+        public const ulong m_vOldOrigin = 0x15A0; // Vector
+
     }
 }

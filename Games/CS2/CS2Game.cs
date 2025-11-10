@@ -17,6 +17,7 @@ namespace MamboDMA.Games.CS2
         private static bool _drawDistance = true;
         private static bool _drawSkeletons = false;
         private static bool _showDebug = false;
+        private static bool _showEntityDebug = false;
 
         private static Vector4 _colorFriendly = new(1f, 0.25f, 0.25f, 1f);
         private static Vector4 _colorEnemy = new(0f, 0.6f, 1f, 1f);
@@ -77,14 +78,20 @@ namespace MamboDMA.Games.CS2
             {
                 ImGui.Separator();
                 ImGui.Text("©¤ Debug Info ©¤");
-                ImGui.Text($"clientBase: 0x{Players.clientBase:X}");
-                ImGui.Text($"entityListPtr: 0x{Players.entityListPtr:X}");
-                ImGui.Text($"listEntry: 0x{Players.listEntry}");
+                ImGui.Text($"clientBase: 0x{CS2Entities.clientBase:X}");
+                ImGui.Text($"entityListPtr: 0x{CS2Entities.entityListPtr:X}");
                 ImGui.Text("©¤ 64 controllers ©¤");
-                ImGui.Text($"currentController: 0x{Players.currentController}");
-                ImGui.Text($"pawnHandle: 0x{Players.pawnHandle}");
+                ImGui.Text($"listEntry: 0x{CS2Entities.listEntry:X}");
+                ImGui.Text($"controllerBase: 0x{CS2Entities.controllerBase:X}");
+                ImGui.Text($"playerPawn: 0x{CS2Entities.playerPawn:X}");
+                ImGui.Text($"listEntry2: 0x{CS2Entities.listEntry2:X}");
+                ImGui.Text($"addressBase: 0x{CS2Entities.addressBase:X}");
+                ImGui.Checkbox("Show Entity Debug Info", ref _showEntityDebug);
 
-                //DrawPlayersDebugWindow();
+                if (_showEntityDebug)
+                {
+                    DrawEntitiesDebugWindow();
+                }
             }
 
             ImGui.SameLine();
@@ -93,37 +100,35 @@ namespace MamboDMA.Games.CS2
             ImGui.End();
         }
 
-        private static void DrawPlayersDebugWindow()
+        private static void DrawEntitiesDebugWindow()
         {
-            ImGui.Begin("CS2 Player Debug", ImGuiWindowFlags.None);
+            ImGui.Begin("CS2 Entity Debug", ImGuiWindowFlags.None);
 
-            var list = Players.GetCachedPlayers();
+            var list = CS2Entities.GetCachedEntitiesSnapshot().ToArray();
 
-            if (ImGui.BeginTable("cs2_dbg_tbl", 7,
+            if (ImGui.BeginTable("cs2_dbg_tbl", 6,
                 ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY,
                 new Vector2(1150, 400)))
             {
                 ImGui.TableSetupScrollFreeze(0, 1);
                 ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 24);
-                ImGui.TableSetupColumn("Controller");
-                ImGui.TableSetupColumn("Pawn");
+                ImGui.TableSetupColumn("LifeState");
                 ImGui.TableSetupColumn("Health");
-                ImGui.TableSetupColumn("Pos.X");
-                ImGui.TableSetupColumn("Pos.Y");
-                ImGui.TableSetupColumn("Pos.Z");
+                ImGui.TableSetupColumn("Team");
+                ImGui.TableSetupColumn("Origin");
+                ImGui.TableSetupColumn("Name");
                 ImGui.TableHeadersRow();
 
-                for (int i = 0; i < list.Count; i++)
+                for (int i = 0; i < list.Length; i++)
                 {
-                    var p = list[i];
+                    var e = list[i];
                     ImGui.TableNextRow();
-                    ImGui.TableSetColumnIndex(0); ImGui.TextUnformatted(p.Index.ToString());
-                    ImGui.TableSetColumnIndex(1); ImGui.TextUnformatted($"0x{p.Controller:X}");
-                    ImGui.TableSetColumnIndex(2); ImGui.TextUnformatted($"0x{p.Pawn:X}");
-                    ImGui.TableSetColumnIndex(3); ImGui.TextUnformatted(p.Health.ToString());
-                    ImGui.TableSetColumnIndex(4); ImGui.TextUnformatted(p.Position.X.ToString("0.00"));
-                    ImGui.TableSetColumnIndex(5); ImGui.TextUnformatted(p.Position.Y.ToString("0.00"));
-                    ImGui.TableSetColumnIndex(6); ImGui.TextUnformatted(p.Position.Z.ToString("0.00"));
+                    ImGui.TableSetColumnIndex(0); ImGui.TextUnformatted(i.ToString());
+                    ImGui.TableSetColumnIndex(1); ImGui.TextUnformatted(e.LifeState.ToString());
+                    ImGui.TableSetColumnIndex(2); ImGui.TextUnformatted(e.Health.ToString());
+                    ImGui.TableSetColumnIndex(3); ImGui.TextUnformatted(e.Team.ToString());
+                    ImGui.TableSetColumnIndex(4); ImGui.TextUnformatted(e.Origin.ToString());
+                    ImGui.TableSetColumnIndex(5); ImGui.TextUnformatted(e.Name);
                 }
 
                 ImGui.EndTable();
@@ -153,8 +158,11 @@ namespace MamboDMA.Games.CS2
             if (_running || !DmaMemory.IsAttached) return;
             _running = true;
 
-            Players.StartCache();
-            Logger.Info("[CS2] players cache threads started");
+            CS2Entities.StartCache();
+            Logger.Info("[CS2] entity cache threads started");
+
+            //Players.StartCache();
+            //Logger.Info("[CS2] entity cache threads started");
         }
 
         public void Stop()
