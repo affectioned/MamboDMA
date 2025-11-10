@@ -1,56 +1,96 @@
-:root { color-scheme: dark; }
-* { box-sizing: border-box; }
-html, body { height: 100%; }
-body {
-  margin: 0;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  background: #111;
-  color: #ddd;
-  display: grid;
-  grid-template-rows: auto auto 1fr; /* topbar, panelbar, canvas area */
-  min-height: 100vh;
+:root{
+  --bg: #0e1116;
+  --fg: #d7dde8;
+  --muted: #a6b0c0;
+  --panel: #151a22;
+  --accent: #2dd4bf;
+  --border: #202633;
+  --toolbar-bg: #0b0f14;
 }
 
-#topbar {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 8px 12px; background: #181818; border-bottom: 1px solid #2a2a2a;
-  gap: 12px; flex-wrap: wrap;
-}
-#topbar .left { display:flex; align-items:center; gap:8px; }
-#topbar input[type="text"] {
-  width: 220px; height: 28px; background: #111; border: 1px solid #2a2a2a;
-  border-radius: 6px; color: #ddd; padding: 0 8px;
-}
-#topbar select {
-  height: 28px; background:#111; color:#ddd; border:1px solid #2a2a2a; border-radius: 6px;
-  padding: 0 8px;
-}
-.controls label { margin-right: 12px; font-size: 13px; }
-#status { margin-left: 8px; opacity: .8; }
-
-#panelbar {
-  display: flex; gap: 16px; padding: 8px 12px; border-bottom: 1px solid #2a2a2a;
-  background: #151515; flex-wrap: wrap;
-}
-.panel { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-.panel strong { margin-right: 6px; color:#bbb; }
-.panel input[type="number"] { width: 84px; background:#111; border:1px solid #2a2a2a; color:#ddd; border-radius:6px; padding:4px 6px; }
-.panel input[type="color"] { width: 38px; height: 28px; border:1px solid #2a2a2a; background:#111; border-radius:6px; padding:0; }
-
-#wrap {
-  /* this row auto-fills the rest of the viewport via grid 1fr */
-  min-height: 0; /* important so child can grow */
-}
-#radar {
-  width: 100%;
-  height: 100%;
-  display: block;
-  image-rendering: crisp-edges;
-  background: #000;
-  border-radius: 12px;
-  box-shadow: 0 0 0 1px #2a2a2a, 0 12px 40px rgba(0,0,0,.6);
+*{ box-sizing: border-box; }
+html,body{
+  height:100%; margin:0;
+  background:var(--bg); color:var(--fg);
+  font:14px/1.4 ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial;
 }
 
-button { padding: 6px 10px; border-radius: 8px; border: 1px solid #2a2a2a; background: #222; color:#ddd; cursor:pointer; }
-button:hover { background:#282828; }
-.dragging { cursor: grabbing !important; }
+/* Grid layout: toolbar auto-height, canvas fills the rest */
+#app{
+  height:100dvh;
+  display:grid;
+  grid-template-rows:auto 1fr;
+  min-height:0; /* allow the second row to shrink properly */
+}
+
+/* Toolbar (in-flow, sticky so it stays visible when scrolling small screens) */
+#toolbar{
+  position:sticky; top:0; z-index:10;
+  background:var(--toolbar-bg);
+  border-bottom:1px solid var(--border);
+}
+
+/* Top strip */
+#toolbar-top{
+  display:flex; align-items:center; gap:12px;
+  padding:6px 10px; background:#0b0f14;
+  border-bottom:1px solid var(--border);
+}
+#collapseBtn{
+  background:#121826; color:var(--fg);
+  border:1px solid var(--border); border-radius:8px;
+  padding:4px 8px; cursor:pointer;
+}
+#collapseBtn:hover{ background:#162035; }
+
+.tabs{
+  display:flex; gap:8px; align-items:center;
+}
+.tabs .tab{
+  background:#121826; color:var(--fg);
+  border:1px solid var(--border); border-radius:8px;
+  padding:6px 10px; cursor:pointer;
+}
+.tabs .tab.active{ outline:2px solid var(--accent); }
+
+#status{ color:#9fe3ff; margin-left:auto; }
+
+.tabpage{
+  padding:10px 12px;
+}
+#toolbar.collapsed .tabpage{ display:none; } /* collapse to just the top strip */
+.tabpage { display: none; }
+.tabpage.active { display: block; }
+/* Rows + inputs */
+.row{
+  display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+  margin-top:10px;
+}
+.inline{
+  display:flex; flex-direction:column; gap:4px;
+  color:var(--muted);
+}
+.inline.grow{ flex:1 1 280px; }
+
+input[type="text"], input[type="number"], select{
+  background:#0f141c; color:var(--fg);
+  border:1px solid var(--border); border-radius:8px; padding:6px 8px; outline:none;
+}
+input[type="range"]{ accent-color: var(--accent); }
+button{
+  background:#121826; color:var(--fg);
+  border:1px solid var(--border); border-radius:8px;
+  padding:6px 10px; cursor:pointer;
+}
+button:hover{ background:#162035; }
+
+/* Canvas area (fills the 2nd grid row) */
+#wrap{
+  min-height:0; /* important for grid children that need to shrink */
+}
+#radar{
+  width:100%; height:100%;
+  display:block; background:#06080c;
+  cursor:grab;
+}
+#radar.dragging{ cursor:grabbing; }

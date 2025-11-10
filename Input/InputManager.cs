@@ -41,7 +41,7 @@ namespace MamboDMA.Input
         // Scanning helpers
         ulong FindSignature(uint pid, ulong start, ulong end, string idaStylePattern); // returns 0 if not found
 
-        // EAT / PDB (optional ‚Äì used for Win10 path)
+        // EAT / PDB (optional ‚Ä? used for Win10 path)
         ulong GetExportVA(uint pid, string moduleName, string function);               // 0 if not found
         bool PdbSymbolAddress(uint pid, string moduleName, string symbol, out ulong va);
     }
@@ -91,7 +91,7 @@ namespace MamboDMA.Input
             if (_initialized) return;
             _vmm = vmm ?? throw new ArgumentNullException(nameof(vmm));
 
-            Log("[Input] Initialize()‚Ä¶");
+            Log("[Input] Initialize()‚Ä?");
 
             // Read OS build
             try
@@ -103,16 +103,16 @@ namespace MamboDMA.Input
             }
             catch (Exception e)
             {
-                Log($"[Input] Registry read failed: {e.Message} ‚Äî Safe Mode");
+                Log($"[Input] Registry read failed: {e.Message} ‚Ä? Safe Mode");
                 _safeMode = true;
                 return;
             }
 
             // Find winlogon pid|km flag and resolve gaf
             _pidWinlogon = _vmm.GetPidByName("winlogon.exe");
-            if (_pidWinlogon == 0) { Log("[Input] winlogon.exe not found ‚Äî Safe Mode"); _safeMode = true; return; }
+            if (_pidWinlogon == 0) { Log("[Input] winlogon.exe not found ‚Ä? Safe Mode"); _safeMode = true; return; }
 
-            // If your VMM needs the ‚Äúwith kernel memory‚Äù flag, OR it into pid here.
+            // If your VMM needs the ‚Äúwith kernel memory‚Ä? flag, OR it into pid here.
             // Keep as-is if your adapter already does it internally:
             _pidWinlogonKM = _pidWinlogon | IVmmEx.PID_PROCESS_WITH_KERNELMEMORY;
 
@@ -127,7 +127,7 @@ namespace MamboDMA.Input
                     if (!_vmm.MemRead(_pidWinlogonKM, _gaf, (nint)p, 64, out var read,
                         VmmFlags.NOCACHE | VmmFlags.NO_PREDICTIVE_READ | VmmFlags.NOCACHEPUT) || read != 64)
                     {
-                        Log("[Input] Initial MemRead failed ‚Äî Safe Mode");
+                        Log("[Input] Initial MemRead failed ‚Ä? Safe Mode");
                         _safeMode = true;
                         return;
                     }
@@ -165,7 +165,7 @@ namespace MamboDMA.Input
             return idx != 0;
         }
 
-        // External mouse ‚Äúprevious‚Äù frame (for edge detection when we‚Äôre not initialized)
+        // External mouse ‚Äúprevious‚Ä? frame (for edge detection when we‚Äôre not initialized)
         private static readonly bool[] _extMousePrev = new bool[6]; // 1..5 used
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -377,13 +377,13 @@ namespace MamboDMA.Input
         // ===== resolver (Win11+) =====
         private static bool ResolveNewWindows()
         {
-            Log("[Input] Win11+ resolver (sig-scan) ‚Ä¶");
+            Log("[Input] Win11+ resolver (sig-scan) ‚Ä?");
             var csrssPids = _vmm.GetPidsByName("csrss.exe") ?? Array.Empty<uint>();
             if (csrssPids.Length == 0) { Log("[Input] csrss.exe not found"); return false; }
 
             foreach (var pidUser in csrssPids)
             {
-                var pid = KM(pidUser);  // <‚Äî key change
+                var pid = KM(pidUser);  // <‚Ä? key change
 
                 // win32k*.sys (session module lives here)
                 if (!TryWin32k(pid, out var kBase, out var kSize)) continue;
@@ -394,11 +394,11 @@ namespace MamboDMA.Input
                     gSessPtr = _vmm.FindSignature(pid, kBase, kBase + kSize, "48 8B 05 ? ? ? ? FF C9");
                 if (gSessPtr == 0) { Log("[Input] g_session_global_slots sig not found"); continue; }
 
-                var rel = Read<int>(pid, gSessPtr + 3);         // <‚Äî use KM pid
+                var rel = Read<int>(pid, gSessPtr + 3);         // <‚Ä? use KM pid
                 if (!rel.ok) { Log("[Input] rel read fail"); continue; }
                 var gSlots = gSessPtr + 7UL + (ulong)rel.val;
 
-                // walk slots ‚Üí user_session_state
+                // walk slots ‚Ü? user_session_state
                 ulong userSession = 0;
                 for (int i = 0; i < 8; i++)
                 {
@@ -417,7 +417,7 @@ namespace MamboDMA.Input
                 var p = _vmm.FindSignature(pid, kbase, kbase + ksz, "48 8D 90 ? ? ? ? E8 ? ? ? ? 0F 57 C0");
                 if (p == 0) { Log("[Input] session offset sig not found"); continue; }
 
-                var off = Read<uint>(pid, p + 3);               // <‚Äî use KM pid
+                var off = Read<uint>(pid, p + 3);               // <‚Ä? use KM pid
                 if (!off.ok) { Log("[Input] session offset read fail"); continue; }
 
                 _gaf = userSession + off.val;
@@ -433,7 +433,7 @@ namespace MamboDMA.Input
         // ===== resolver (Win10/older) =====
         private static bool ResolveOldWindows()
         {
-            Log("[Input] Win10 resolver (EAT/PDB) ‚Ä¶");
+            Log("[Input] Win10 resolver (EAT/PDB) ‚Ä?");
 
             // Try EAT
             var eat = _vmm.GetExportVA(_pidWinlogonKM, "win32kbase.sys", "gafAsyncKeyState");
@@ -517,160 +517,5 @@ namespace MamboDMA.Input
         private static readonly Dictionary<int, List<ActionRec>> _actions = new();
         private static int _nextActionId = 0;
         private sealed class ActionRec { public int Id; public string Name = ""; public KeyStateChangedHandler? Handler; }
-    }
-    public static class VkNames
-    {
-        private static readonly Dictionary<int, string> Map = new()
-        {
-            // Control / navigation
-            [0x08] = "Backspace",
-            [0x09] = "Tab",
-            [0x0D] = "Enter",
-            [0x13] = "Pause",
-            [0x14] = "CapsLock",
-            [0x1B] = "Esc",
-            [0x20] = "Space",
-            [0x21] = "PageUp",
-            [0x22] = "PageDown",
-            [0x23] = "End",
-            [0x24] = "Home",
-            [0x25] = "Left",
-            [0x26] = "Up",
-            [0x27] = "Right",
-            [0x28] = "Down",
-            [0x2C] = "PrintScreen",
-            [0x2D] = "Insert",
-            [0x2E] = "Delete",
-    
-            // Windows / menu
-            [0x5B] = "LWin",
-            [0x5C] = "RWin",
-            [0x5D] = "Apps",
-    
-            // NumPad digits and ops
-            [0x60] = "Num0",
-            [0x61] = "Num1",
-            [0x62] = "Num2",
-            [0x63] = "Num3",
-            [0x64] = "Num4",
-            [0x65] = "Num5",
-            [0x66] = "Num6",
-            [0x67] = "Num7",
-            [0x68] = "Num8",
-            [0x69] = "Num9",
-            [0x6A] = "Num*",
-            [0x6B] = "Num+",
-            [0x6D] = "Num-",
-            [0x6E] = "Num.",
-            [0x6F] = "Num/",
-    
-            // Modifiers
-            [0xA0] = "LShift",
-            [0xA1] = "RShift",
-            [0xA2] = "LCtrl",
-            [0xA3] = "RCtrl",
-            [0xA4] = "LAlt",
-            [0xA5] = "RAlt",
-    
-            // Media / browser (optional but nice)
-            [0xA6] = "BrowserBack",
-            [0xA7] = "BrowserForward",
-            [0xA8] = "BrowserRefresh",
-            [0xA9] = "BrowserStop",
-            [0xAA] = "BrowserSearch",
-            [0xAB] = "BrowserFavorites",
-            [0xAC] = "BrowserHome",
-            [0xAD] = "VolumeMute",
-            [0xAE] = "VolumeDown",
-            [0xAF] = "VolumeUp",
-            [0xB0] = "MediaNext",
-            [0xB1] = "MediaPrev",
-            [0xB2] = "MediaStop",
-            [0xB3] = "MediaPlayPause",
-
-            [0x01] = "LButton",
-            [0x02] = "RButton",
-            [0x04] = "MButton",
-            [0x05] = "Mouse4",
-            [0x06] = "Mouse5",  
-
-            // OEM punctuation (US layout defaults)
-            [0xBA] = ";",
-            [0xBB] = "=",
-            [0xBC] = ",",
-            [0xBD] = "-",
-            [0xBE] = ".",
-            [0xBF] = "/",
-            [0xC0] = "`",
-            [0xDB] = "[",
-            [0xDC] = "\\",
-            [0xDD] = "]",
-            [0xDE] = "'",
-        };
-    
-        public static string Name(int vk)
-        {
-            if (vk <= 0) return null;
-    
-            if (Map.TryGetValue(vk, out var s))
-                return s;
-    
-            // Top-row digits 0..9
-            if (vk >= 0x30 && vk <= 0x39) return ((char)vk).ToString();
-    
-            // Letters A..Z
-            if (vk >= 0x41 && vk <= 0x5A) return ((char)vk).ToString();
-    
-            // Function keys F1..F24 (0x70..0x87)
-            if (vk >= 0x70 && vk <= 0x87) return "F" + (vk - 0x6F);
-    
-            // Try OS-provided (localized) name on Windows
-            var win = TryWindowsKeyName(vk);
-            if (!string.IsNullOrEmpty(win))
-                return win;
-    
-            // Final fallback
-            return $"VK {vk:X2}";
-        }
-    
-    #if WINDOWS || UNITY_STANDALONE_WIN || WIN32 || WIN64
-        const uint MAPVK_VK_TO_VSC = 0x0;
-    
-        [DllImport("user32.dll")] static extern uint MapVirtualKey(uint uCode, uint uMapType);
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetKeyNameText(int lParam, StringBuilder lpString, int nSize);
-    
-        static bool IsExtended(int vk) => vk switch
-        {
-            0x21 or 0x22 or 0x23 or 0x24 or // PgUp/PgDn/End/Home
-            0x25 or 0x26 or 0x27 or 0x28 or // Arrows
-            0x2D or 0x2E or                 // Ins/Del
-            0x5B or 0x5C or 0x5D or         // Win/Apps
-            0x6F or                         // Num /
-            0x90 or 0x91                    // NumLock/ScrollLock
-                => true,
-            _ => false
-        };
-    
-        static string TryWindowsKeyName(int vk)
-        {
-            try
-            {
-                uint sc = MapVirtualKey((uint)vk, MAPVK_VK_TO_VSC);
-                if (sc == 0) return null;
-    
-                int lParam = (int)(sc << 16);
-                if (IsExtended(vk)) lParam |= 1 << 24;
-    
-                var sb = new StringBuilder(64);
-                int len = GetKeyNameText(lParam, sb, sb.Capacity);
-                if (len <= 0) return null;
-    
-                return sb.ToString();
-            }
-            catch { return null; }
-        }
-    #else
-        static string TryWindowsKeyName(int vk) => null;
-    #endif
     }    
 }

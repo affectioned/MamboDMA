@@ -12,11 +12,12 @@ namespace MamboDMA.Games.Reforger
         public bool ShowName = true;
         public bool ShowWeapon = true;
         public bool ShowDistance = true;
+        public bool ShowDeadMarkers = true;
 
         // ───── ESP Layout ─────
         public float BoxWidthOffsetPx = 0f;
         public float BoxHeightOffsetPx = 0f;
-        public float HeadTopOffsetPx = 0f;
+        public float HeadTopOffsetPx = 8f;
         public float BoxOutlineThick = 1.6f;
         public float HpBarWidthPx = 4f;
 
@@ -28,16 +29,16 @@ namespace MamboDMA.Games.Reforger
         public Vector4 WeaponColor = new(200 / 255f, 230 / 255f, 255 / 255f, 1f);
         public Vector4 DistanceColor = new(180 / 255f, 255 / 255f, 190 / 255f, 1f);
         public Vector4 HpTextColor = new(1f, 0.86f, 0.63f, 1f);
-
         public Vector4 SkelColor = new(1f, 1f, 1f, 1f);
         public Vector4 SkelShadowColor = new(0, 0, 0, 0.55f);
+        public Vector4 DeadMarkerColor = new(1f, 0.3f, 0.3f, 1f);
 
         // ───── Player Filters ─────
         public bool IncludeFriendlies = false;
         public bool OnlyPlayersFromManager = false;
         public bool RequireHitZones = false;
         public bool IncludeRagdolls = false;
-        public bool AnimatedOnly = true;
+        public bool AnimatedOnly = false;
 
         // ───── Performance / Loops ─────
         public float MaxDrawDistance = 500f;
@@ -48,21 +49,22 @@ namespace MamboDMA.Games.Reforger
 
         // ───── Skeletons ─────
         public bool EnableSkeletons = true;
-        public int SkeletonLevel = 10; // enum mapped
+        public int SkeletonLevel = 10; // 6, 10, or 14
         public float SkeletonThickness = 1.2f;
 
+        // ───── Items ─────
+        public bool ShowItemsWeapons = true;
+        public bool ShowItemsAmmo = true;
+        public bool ShowItemsAttachments = true;
+        public bool ShowItemsEquipment = true;
+        public bool ShowItemsMisc = false;
+        public int ItemsHz = 5;
 
-        // ESP – Items
-        public bool ShowItemsWeapons { get; set; } = true;
-        public bool ShowItemsAmmo { get; set; } = true;
-        public bool ShowItemsAttachments { get; set; } = true;
-        public bool ShowItemsEquipment { get; set; } = true;
-        public bool ShowItemsMisc { get; set; } = false;
-
-        // ESP – Vehicles
-        public bool ShowVehiclesCars { get; set; } = true;
-        public bool ShowVehiclesHelis { get; set; } = true;
-        public bool ShowVehiclesPlanes { get; set; } = false;
-        public bool ShowVehiclesBoats { get; set; } = false;        
+        // ───── Vehicles ─────
+        public bool ShowVehiclesCars = true;
+        public bool ShowVehiclesHelis = true;
+        public bool ShowVehiclesPlanes = false;
+        public bool ShowVehiclesBoats = false;
+        public int VehiclesHz = 10;
     }
 }

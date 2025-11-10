@@ -2,9 +2,8 @@ using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Text;
 using MamboDMA;
-using VmmSharpEx.Scatter;
+using MamboDMA.Games;
 using static MamboDMA.Misc;
 
 namespace ArmaReforgerFeeder
@@ -79,7 +78,7 @@ namespace ArmaReforgerFeeder
     {
         // Pose
         public Vector3f Position, InvRight, InvUp, Fwd;
-
+        public int Seq; // even=stable, odd=writer in progress
         // Camera params (raw)
         public float Fov, CameraZoom;
         public Vector3f ZoomIncreaseFactor;
@@ -90,11 +89,13 @@ namespace ArmaReforgerFeeder
         public Matrix4x4 Proj;
         public Matrix4x4 ViewProj;
 
-        // Precomputed projection factors (avoid trig per WorldToScreen)
-        // If FOV is treated as horizontal:  ndc = (x/z)*FxH, (y/z)*FyH
-        // If FOV is treated as vertical:    ndc = (x/z)*FxV, (y/z)*FyV
+        // Precomputed projection factors
         public float FxH, FyH, FxV, FyV;
-        public float Aspect;              // Screen.W / Screen.H (float cache)
+        public float Aspect;
+        
+        // Scope detection
+        public bool IsScoped;
+        public bool IsPipActive;
     }
 
     public enum EntityStance : int
@@ -105,145 +106,59 @@ namespace ArmaReforgerFeeder
         UNKNOWN = -1,
     }
 
-    #endregion
-
-    #region === Offsets ============================================================================
-    public static class Off
-    {
-        // Game / world
-        public const ulong Game = 0x1D59488;
-        public const ulong GameWorld = 0x130;
-        public const ulong LocalPlayerController = 0x378;
-        public const ulong LocalPlayer = 0x08;
-        public const ulong PlayerManager  = 0x2D0;   // you already have this
-        public static ulong PmPlayerArray = 0x18;    // vector<Player*> 
-        public static ulong PmPlayerCount = 0x24;    // int
-        public static ulong Player_Name   = 0x18;    // ptr to UTF8 name
-        public static ulong Player_FirstLevelPtr = 0x48;
-        public static ulong FirstLevel_ControlledEntity = 0x8;
-        public static ulong ControlledEntity_Ptr2 = 0x10;
-        // eastl::vector<PlayerController*> layout (begin,end) – confirm these:
-        public const ulong PmControllersBegin = 0x1A8;   // TODO: verify
-        public const ulong PmControllersEnd   = 0x1B0;   // TODO: verify
+    #endregion    
     
-        public const ulong Controller_Player            = 0x08;  // you use this for LocalPlayer already
-        public const ulong Controller_ControlledEntity  = 0x1F0; // TODO: verify
-
-        // Camera manager + camera
-        public const ulong AVCameraManagerWeak = 0x308;
-        public const ulong AVCameraManager = 0x08;
-        public const ulong FirstPersonFOV = 0x128;
-        public const ulong ThirdPersonFOV = 0x12C;
-        public const ulong PlayerCameraWeak = 0x108;
-        public const ulong PlayerCamera = 0x08;
-        public const ulong CameraPos = 0x58;
-        public const ulong InvertedViewRight = 0x70;
-        public const ulong InvertedViewUp = 0x7C;
-        public const ulong VectorViewForward = 0x88;
-        public const ulong CameraViewType = 0x1C8;
-        public const ulong CameraZoom = 0x214;
-        public const ulong ZoomIncreaseFactor = 0x18C;
-
-        // Entities
-        public const ulong EntityList = 0x118;
-        public const ulong EntityCount = 0x124;
-        public const ulong EntityPosition = 0x68;
-
-        // Faction
-        public const ulong FactionComponent = 0x188;
-        public const ulong FactionComponentLocal = 0x178;
-        public const ulong FactionComponentDataClass = 0x08;
-        public const ulong FactionComponentDataType = 0x68;
-
-        // Damage / HP
-        public const ulong ExtDamageMgr = 0x148;
-        public const ulong HitZone = 0xC8;
-        public const ulong HitZoneMaxHP = 0x40;
-        public const ulong HitZoneHP = 0x44;
-        public const ulong Isdead = 0x4C;
-
-        public const ulong PrefabMgr       = 0xE8;  // entity -> prefab data
-        public const ulong PrefabDataClass = 0x8;  // <-- was 0x08; this matches your C++ sample
-        public const ulong PrefabDataType  = 0x10;  // RTTI-ish string (often "VehicleClass")
-        public const ulong PrefabModelNamePtr = 0x78; // char* -> "Vehicle/Car/HMMWV.et"
-        // Prefab
-        public const ulong PrefabMgrVic       = 0xE8;  // entity -> prefab data
-        public const ulong PrefabDataClassVic = 0x30;  // <-- was 0x08; this matches your C++ sample
-        public const ulong PrefabDataTypeVic  = 0x10;  // RTTI-ish string (often "VehicleClass")
-        public const ulong PrefabModelNamePtrVic = 0x78; // char* -> "Vehicle/Car/HMMWV.et"
-
-        // Common component pointers
-        public const ulong EntityMatrix = 0x80;
-        public const ulong MeshComponent = 0x50;             // MeshObjectComponent
-        public const ulong MeshComponentData = 0x18;         // MeshObjectComponentData
-        public const ulong MeshObject = 0x30;
-        public const ulong MeshComponentBones = 0x40;
-        public const ulong MeshComponentBonesMatrixSize = 0x30;
-        public const ulong MeshObjectBonesCount = 0x100;
-        public const ulong MeshObjectBonesList = 0xE0;
-        public const ulong MeshObjectBonesSize = 0x18;
-
-        // Animation
-        public const ulong CharacterAnimationComponent = 0x138;
-        public const uint CharacterStanceType = 0x1B0;
-    }
-    #endregion
-
-    #region === Game: camera + projection + W2S ====================================================
+    /// <summary>
+    /// Camera management and world-to-screen projection.
+    /// FIXED: Proper scope detection and FOV handling
+    /// </summary>
     public static class Game
     {
-        // Public state
         public static CameraModel Camera;
-        public static ScreenSettings Screen = new(1920, 1080);
+        public static ScreenSettings Screen = new(ScreenService.Current.W, ScreenService.Current.H);
+        public static bool FovIsHorizontal = false;
+
+        private static ulong _gamePtr, _camMgrWeak, _camMgr, _playerCamWeak, _playerCam;
+        private static bool _vpValid;
+        private static long _lastCamTick;
+
         public static void Reset()
         {
             ResetCamera();
+            if (ScreenService.Current.W <= 0 || ScreenService.Current.H <= 0)
+                ScreenService.UpdateFromMonitor(GameSelector.SelectedMonitor);
             _gamePtr = _camMgrWeak = _camMgr = _playerCamWeak = _playerCam = 0;
         }
-        /// <summary>
-        /// If true, treat FOV as horizontal. If false, treat FOV as vertical.
-        /// You can override per-call in WorldToScreen with the nullable parameter.
-        /// </summary>
-        public static bool FovIsHorizontal = false;
-
-        // Cached pointers for the 1-round scatter path
-        static ulong _gamePtr, _camMgrWeak, _camMgr, _playerCamWeak, _playerCam;
 
         public static void ResetCamera()
         {
-            Camera.Position = default;                 // (0,0,0)
-            Camera.Forward  = new Vector3f(0, 0, -1);  // sane default
-            Camera.Up       = new Vector3f(0, 1,  0);
-            Camera.Right    = new Vector3f(1, 0,  0);
-
-            Camera.CameraZoom        = 0f;             // hipfire
-            Camera.ZoomIncreaseFactor = new Vector3f(1f, 1f, 1f); // no extra zoom
-
-            Camera.View     = Matrix4x4.Identity;
-            Camera.Proj     = Matrix4x4.Identity;
+            Camera.Position = default;
+            Camera.Forward = new Vector3f(0, 0, -1);
+            Camera.Up = new Vector3f(0, 1, 0);
+            Camera.Right = new Vector3f(1, 0, 0);
+            Camera.CameraZoom = 0f;
+            Camera.ZoomIncreaseFactor = new Vector3f(1f, 1f, 1f);
+            Camera.View = Matrix4x4.Identity;
+            Camera.Proj = Matrix4x4.Identity;
             Camera.ViewProj = Matrix4x4.Identity;
-
+            Camera.IsScoped = false;
+            Camera.IsPipActive = false;
             _vpValid = false;
             _lastCamTick = 0;
-        }        
-        private static bool _vpValid;
-        private static long _lastCamTick;        
-        #region Camera update (fast scatter)
+        }
+
         public static void UpdateCamera()
         {
-            // If we have valid cached pointers, try the fast path first.
             if (_camMgr != 0 && _playerCam != 0)
             {
                 if (FastCameraScatter())
                 {
-                    UpdateProjection();  // <-- precompute Fx/Fy once per frame
+                    UpdateProjection();
                     return;
                 }
-                // Stale pointers, reset and resolve again.
                 _camMgr = _playerCam = 0;
             }
 
-            // Resolve pointers cheaply, then go through the fast path.
             if (!DmaMemory.Read(DmaMemory.Base + Off.Game, out _gamePtr) || _gamePtr == 0) return;
             DmaMemory.Read(_gamePtr + Off.AVCameraManagerWeak, out _camMgrWeak);
             DmaMemory.Read(_camMgrWeak + Off.AVCameraManager, out _camMgr);
@@ -258,14 +173,13 @@ namespace ArmaReforgerFeeder
         private static bool FastCameraScatter()
         {
             float f1 = 0, f3 = 0, zoom = 0;
-            int vtype = 0;
+            int vtype = 0, pipFlag = 0;
             Vector3f pos = default, invR = default, invU = default, fwd = default, zf = default;
             bool okFov = false, okPose = false;
 
             using var map = DmaMemory.Scatter();
             var rd = map.AddRound(useCache: false);
 
-            // Gather everything needed for pose + fov in one round.
             rd[0].AddValueEntry<float>(0, _camMgr + Off.FirstPersonFOV);
             rd[0].AddValueEntry<float>(1, _camMgr + Off.ThirdPersonFOV);
             rd[0].AddValueEntry<Vector3f>(2, _playerCam + Off.CameraPos);
@@ -275,6 +189,7 @@ namespace ArmaReforgerFeeder
             rd[0].AddValueEntry<int>(6, _playerCam + Off.CameraViewType);
             rd[0].AddValueEntry<float>(7, _playerCam + Off.CameraZoom);
             rd[0].AddValueEntry<Vector3f>(8, _playerCam + Off.ZoomIncreaseFactor);
+            rd[0].AddValueEntry<int>(9, _camMgr + Off.PipActiveFlag);
 
             rd[0].Completed += (_, cb) =>
             {
@@ -288,25 +203,46 @@ namespace ArmaReforgerFeeder
                          cb.TryGetValue<int>(6, out vtype) &&
                          cb.TryGetValue<float>(7, out zoom) &&
                          cb.TryGetValue<Vector3f>(8, out zf);
+
+                cb.TryGetValue<int>(9, out pipFlag);
             };
 
             map.Execute();
             if (!(okFov && okPose)) return false;
 
-            float blend = 0.3f; // 0 = instant, 1 = no change
-            Camera.Position = Lerp(Camera.Position, pos, blend);
-            Camera.Fwd = Lerp(Camera.Fwd, Normalize(fwd), blend);
-            Camera.InvUp = Lerp(Camera.InvUp, Normalize(invU), blend);
-            Camera.InvRight = Lerp(Camera.InvRight, Normalize(invR), blend);
+            // Prepare values
+            var fwdN = Normalize(fwd);
+            var invUN = Normalize(invU);
+            var invRN = Normalize(invR);
+            var aspect = (Screen.H > 0f) ? (Screen.W / Screen.H) : 1.0f;
+
+            // Single writer section for all camera fields
+            BeginCamWrite();
+
+            // Light smoothing on position only (set to 0f if you want zero-latency)
+            const float posBlend = 0.12f;
+            Camera.Position = Lerp(Camera.Position, pos, posBlend);
+
+            // NO smoothing on orientation to avoid edge drift/lag
+            Camera.Fwd = fwdN;
+            Camera.InvUp = invUN;
+            Camera.InvRight = invRN;
+
             Camera.CameraZoom = zoom;
             Camera.ZoomIncreaseFactor = zf;
-            Camera.Fov = (vtype == 2) ? f1 : f3;  // 2 == first person
+            Camera.Fov = (vtype == 2) ? f1 : f3;
 
-            // Aspect cached as float (updated in UpdateProjection each frame)
-            Camera.Aspect = (Screen.H > 0f) ? (Screen.W / Screen.H) : 1.0f;
+            // Scope detection as you had
+            Camera.IsPipActive = (pipFlag != 0);
+            bool hasZoomFactor = (zf.X > 1.01f || zf.Y > 1.01f);
+            Camera.IsScoped = Camera.IsPipActive || hasZoomFactor;
 
+            Camera.Aspect = aspect;
+
+            EndCamWrite();
             return true;
         }
+
         private static Vector3f Lerp(in Vector3f a, in Vector3f b, float t)
         {
             return new Vector3f(a.X + (b.X - a.X) * t,
@@ -314,79 +250,120 @@ namespace ArmaReforgerFeeder
                                 a.Z + (b.Z - a.Z) * t);
         }
 
-        #endregion
+        private static float _baselineZx = 1f, _baselineZy = 1f;
 
-        #region Projection precompute (per-frame)
-        /// <summary>
-        /// Precomputes projection factors Fx/Fy for both horizontal and vertical FOV interpretations.
-        /// This removes all trig, division-by-aspect, and zoom divisions from every WorldToScreen call.
-        /// </summary>
         private static void UpdateProjection()
         {
-            // Effective FOV (zoom uses a fixed 90 in your code)
-            float fov = Camera.Fov;
-            if (Camera.CameraZoom > 0f) fov = 90f;
+            float fov;
+            var camSnap = ReadCamStable(); // read once
 
-            // 1/tan(fov/2)
-            double f = 1.0 / Math.Tan((fov * Math.PI / 180.0) * 0.5);
-            float hf = (float)f;                 // horizontal reference factor
-            float vf = (float)f;                 // vertical reference factor
-
-            float aspect = Camera.Aspect <= 0f ? 1f : Camera.Aspect;
-
-            // Horizontal-interpretation pair
-            float fxH = hf;
-            float fyH = hf * aspect;
-
-            // Vertical-interpretation pair
-            float fyV = vf;
-            float fxV = vf / MathF.Max(1e-6f, aspect);
-
-            // Apply zoom scaling (divide by per-axis factor if zoomed)
-            if (Camera.CameraZoom > 0f)
+            if (camSnap.IsScoped)
             {
-                float zx = (Camera.ZoomIncreaseFactor.X == 0f) ? 1f : Camera.ZoomIncreaseFactor.X;
-                float zy = (Camera.ZoomIncreaseFactor.Y == 0f) ? 1f : Camera.ZoomIncreaseFactor.Y;
-
-                fxH /= zx; fyH /= zy;
-                fxV /= zx; fyV /= zy;
+                float zx = camSnap.ZoomIncreaseFactor.X > 0 ? camSnap.ZoomIncreaseFactor.X : 1f;
+                float zy = camSnap.ZoomIncreaseFactor.Y > 0 ? camSnap.ZoomIncreaseFactor.Y : 1f;
+                float maxZoom = Math.Max(zx, zy);
+                fov = 75f / Math.Max(1f, maxZoom);
+                fov = Math.Clamp(fov, 5f, 45f);
+            }
+            else if (camSnap.CameraZoom > 0f)
+            {
+                fov = 90f;
+            }
+            else
+            {
+                fov = 75f;
             }
 
-            Camera.FxH = fxH; Camera.FyH = fyH;
-            Camera.FxV = fxV; Camera.FyV = fyV;
-        }
-        #endregion
+            double f = 1.0 / Math.Tan((fov * Math.PI / 180.0) * 0.5);
+            float vf = (float)f;
 
-        #region WorldToScreen (hot path)
+            float aspect = camSnap.Aspect > 0f ? camSnap.Aspect : 1f;
+
+            // Base factors (vertical-FOV convention)
+            float fxV = vf / MathF.Max(1e-6f, aspect);
+            float fyV = vf;
+            float fxH = vf;
+            float fyH = vf * aspect;
+
+            // --- Relative zoom scaling (uniform to avoid side skew) ---
+            bool clearlyNoZoom = !camSnap.IsScoped && camSnap.CameraZoom <= 0.001f;
+
+            float zNowX = (camSnap.ZoomIncreaseFactor.X > 0f && !float.IsNaN(camSnap.ZoomIncreaseFactor.X)) ? camSnap.ZoomIncreaseFactor.X : 1f;
+            float zNowY = (camSnap.ZoomIncreaseFactor.Y > 0f && !float.IsNaN(camSnap.ZoomIncreaseFactor.Y)) ? camSnap.ZoomIncreaseFactor.Y : 1f;
+            zNowX = Math.Clamp(zNowX, 0.05f, 5f);
+            zNowY = Math.Clamp(zNowY, 0.05f, 5f);
+
+            if (clearlyNoZoom)
+            {
+                const float a = 0.2f; // mild smoothing
+                _baselineZx = (1f - a) * _baselineZx + a * zNowX;
+                _baselineZy = (1f - a) * _baselineZy + a * zNowY;
+            }
+            else
+            {
+                if (_baselineZx <= 0f || float.IsNaN(_baselineZx)) _baselineZx = 1f;
+                if (_baselineZy <= 0f || float.IsNaN(_baselineZy)) _baselineZy = 1f;
+            }
+
+            bool zooming = camSnap.IsScoped || camSnap.CameraZoom > 0.001f;
+            float s = 1f;
+            if (zooming)
+            {
+                float zRatioX = _baselineZx / zNowX;
+                float zRatioY = _baselineZy / zNowY;
+                s = MathF.Sqrt(MathF.Max(0.0001f, zRatioX * zRatioY)); // geometric mean keeps aspect true
+                s = Math.Clamp(s, 0.25f, 4f);
+            }
+
+            BeginCamWrite();
+            Camera.FxV = fxV * s;
+            Camera.FyV = fyV * s;
+            Camera.FxH = fxH * s;
+            Camera.FyH = fyH * s;
+            EndCamWrite();
+        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void BeginCamWrite() => System.Threading.Interlocked.Increment(ref Camera.Seq); // odd
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void EndCamWrite()   => System.Threading.Interlocked.Increment(ref Camera.Seq); // even
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static CameraModel ReadCamStable()
+        {
+            while (true)
+            {
+                int s0 = Volatile.Read(ref Camera.Seq);
+                if ((s0 & 1) != 0) continue;     // writer in progress
+                var snap = Camera;               // struct copy
+                int s1 = Volatile.Read(ref Camera.Seq);
+                if (s0 == s1) return snap;       // stable snapshot
+            }
+        }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool WorldToScreen(in Vector3f p, out float sx, out float sy, bool? treatFovAsHorizontal = null)
         {
             sx = sy = 0f;
-
-            // Camera-space delta
-            var d = new Vector3f(p.X - Camera.Position.X, p.Y - Camera.Position.Y, p.Z - Camera.Position.Z);
-            float tx = Vector3f.Dot(d, Camera.InvRight);
-            float ty = Vector3f.Dot(d, Camera.InvUp);
-            float tz = Vector3f.Dot(d, Camera.Fwd);
+            var cam = ReadCamStable();
+        
+            var d = new Vector3f(p.X - cam.Position.X, p.Y - cam.Position.Y, p.Z - cam.Position.Z);
+            float tx = Vector3f.Dot(d, cam.InvRight);
+            float ty = Vector3f.Dot(d, cam.InvUp);
+            float tz = Vector3f.Dot(d, cam.Fwd);
             if (tz <= 1e-4f) return false;
-
-            // Choose precomputed factors
+        
             bool horiz = treatFovAsHorizontal ?? FovIsHorizontal;
-            float fx = horiz ? Camera.FxH : Camera.FxV;
-            float fy = horiz ? Camera.FyH : Camera.FyV;
-
-            // NDC
+            float fx = horiz ? cam.FxH : cam.FxV;
+            float fy = horiz ? cam.FyH : cam.FyV;
+        
             double ndcX = (tx / tz) * fx;
             double ndcY = (ty / tz) * fy;
-
-            // Screen
+        
             sx = (float)((ndcX + 1.0) * (Screen.W * 0.5));
             sy = (float)((1.0 - ndcY) * (Screen.H * 0.5));
             return !(float.IsNaN(sx) || float.IsNaN(sy) || float.IsInfinity(sx) || float.IsInfinity(sy));
         }
-        #endregion
 
-        #region Helpers
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static Vector3f Normalize(in Vector3f v)
         {
@@ -395,7 +372,5 @@ namespace ArmaReforgerFeeder
             float inv = 1f / len;
             return new Vector3f(v.X * inv, v.Y * inv, v.Z * inv);
         }
-        #endregion
     }
-    #endregion
 }

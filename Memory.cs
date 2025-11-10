@@ -226,7 +226,18 @@ public static class DmaMemory
         EnsureAttached();
         return _vmm!.MemReadValue(Pid, address, out value);
     }
-
+    public static bool Read(ulong address, Span<byte> dst, VmmFlags flags = VmmFlags.NONE)
+    {
+        EnsureAttached();
+        if (dst.Length == 0) return true;
+        unsafe
+        {
+            fixed (byte* p = dst)
+            {
+                return _vmm!.MemRead(Pid, address, (nint)p, (uint)dst.Length, out var read, (VFlags)flags) && read == (uint)dst.Length;
+            }
+        }
+    }
     public static T Read<T>(ulong address) where T : unmanaged
     {
         EnsureAttached();

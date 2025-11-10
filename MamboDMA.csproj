@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <!-- UI stack: raylib + ImGui bridge (rlImGui_cs brings ImGui.NET) -->
+    <PackageReference Include="Open.Nat" Version="2.1.0" />
     <PackageReference Include="Raylib-cs" Version="7.0.1" />
     <PackageReference Include="rlImgui-cs" Version="3.2.0" />
     <PackageReference Include="SkiaSharp" Version="3.119.1" />
@@ -36,6 +37,7 @@
 	  <None Include="Assets\WebRadar\**\*.html" CopyToOutputDirectory="PreserveNewest" />
 	  <None Include="Assets\WebRadar\**\*.png" CopyToOutputDirectory="PreserveNewest" />
 	  <None Include="Assets\WebRadar\**\*.js" CopyToOutputDirectory="PreserveNewest" />
+	  <None Include="Assets\WebRadar\**\*.json" CopyToOutputDirectory="PreserveNewest" />
 	  <None Include="Assets\Img\**\*.svg" CopyToOutputDirectory="PreserveNewest" />
 	  <None Include="Assets\Img\**\*.ico" CopyToOutputDirectory="PreserveNewest" />
 	</ItemGroup>

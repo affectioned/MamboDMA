@@ -245,7 +245,7 @@ namespace MamboDMA
             // read chars at offset 0x10
             var bytes = DmaMemory.ReadBytes(ptr + 0x10, (uint)len);
             return System.Text.Encoding.UTF8.GetString(bytes);
-        }     
+        }
         public static class Win32IconHelper
         {
             private const int ICON_SMALL = 0;
@@ -275,6 +275,10 @@ namespace MamboDMA
                 SendMessage(hwnd, WM_SETICON, ICON_SMALL, hIcon);
                 // Don't call DestroyIcon on .NET Icon.Handle (managed object owns it)
             }
-        }                                   
+        }
     }
+    public static class UiVisibility
+    {
+        public static bool MenusHidden; // true = hide ALL editor/config/theme/game menus
+    }    
 }

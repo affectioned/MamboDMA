@@ -188,6 +188,7 @@ namespace MamboDMA.Gui
         // ─────────────────────────────────────────────
         public static void DrawThemePanel()
         {
+            if (UiVisibility.MenusHidden) return;
             ImGui.Begin("Theme");
             var s = Settings;
             ApplyPreset(s.DefaultPreset); // ensure preset matches current colors

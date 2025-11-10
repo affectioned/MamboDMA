@@ -1,162 +1,222 @@
-// WebRadar ¨C robust init: canvas always sized, map loads on selection, draws even before data arrives.
+(function(){
+  const CANVAS = document.getElementById("radar");
+  const CTX    = CANVAS.getContext("2d");
 
-const CANVAS = document.getElementById("radar");
-const CTX    = CANVAS.getContext("2d");
-
-// Topbar
-const mapSelEl    = document.getElementById("mapSel");
-const serverUrlEl = document.getElementById("serverUrl");
-const btnConn     = document.getElementById("btnConnect");
-const btnCopy     = document.getElementById("btnCopy");
-const statusEl    = document.getElementById("status");
-
-// Mapping controls
-const zoomEl   = document.getElementById("zoom");
-const cmppEl   = document.getElementById("cmpp");
-const cxEl     = document.getElementById("cx");
-const cyEl     = document.getElementById("cy");
-const swapXYEl = document.getElementById("swapxy");
-const flipXEl  = document.getElementById("flipx");
-const flipYEl  = document.getElementById("flipy");
-
-// Filters & icons
-const fSelfEl  = document.getElementById("fSelf");
-const fPMCsEl  = document.getElementById("fPMCs");
-const fBotsEl  = document.getElementById("fBots");
-const fDeadEl  = document.getElementById("fDead");
-const maxRangeEl = document.getElementById("maxRange");
-
-const szSelfEl = document.getElementById("szSelf");
-const szPMCEl  = document.getElementById("szPMC");
-const szBotEl  = document.getElementById("szBot");
-const szDeadEl = document.getElementById("szDead");
-
-const colSelfEl = document.getElementById("colSelf");
-const colPMCEl  = document.getElementById("colPMC");
-const colBotEl  = document.getElementById("colBot");
-const colDeadEl = document.getElementById("colDead");
-
-// Presets (baked)
-const PRESETS = {
-  Farm:   { map:"Farm.png",   cmPerPx:100, centerX:-65742.33, centerY: 19203.812, swapXY:false, flipX:false, flipY:false, zoom:0.5  },
-  Valley: { map:"Valley.png", cmPerPx:100, centerX: -24702.749, centerY:-30996.181, swapXY:false, flipX:false, flipY:false, zoom:0.55 }
-};
-const LOCK_MAPPING_AXES = true;
-
-// State
-let activeKey = (mapSelEl?.value) || "Valley";
-let baked = PRESETS[activeKey];
-
-let dpr = window.devicePixelRatio || 1;
-let es=null, pollTimer=null, connected=false, lastFrame=null;
-
-// Image & pan state
-let mapImg = new Image();
-let imgPan = { x:0, y:0 };
-
-function applyPreset(p){
-  cmppEl.value = p.cmPerPx;
-  cxEl.value   = p.centerX;
-  cyEl.value   = p.centerY;
-  swapXYEl.checked = !!p.swapXY;
-  flipXEl.checked  = !!p.flipX;
-  flipYEl.checked  = !!p.flipY;
-  zoomEl.value     = p.zoom;
-
-  if (LOCK_MAPPING_AXES){
-    cmppEl.disabled   = true;
-    swapXYEl.disabled = true;
-    flipXEl.disabled  = true;
-    flipYEl.disabled  = true;
-  }
-
-  // sensible default server in the input
-  if (serverUrlEl) {
-    serverUrlEl.value = (location.origin && location.origin.startsWith("http"))
-      ? location.origin
-      : "http://localhost:8088";
-  }
-
-  // reset pan when switching maps
-  imgPan.x = 0; imgPan.y = 0;
-}
-
-function loadMap(src){
-  mapImg = new Image();
-  mapImg.onload  = () => drawFrame(lastFrame);
-  mapImg.onerror = () => { console.warn("Map image failed:", src); drawFrame(lastFrame); };
-  mapImg.src = src; // must exist next to index.html (Assets/WebRadar/)
-}
-
-function baseUrl(){
-  const typed = serverUrlEl?.value?.trim() || "";
-  if (typed.startsWith("http")) return typed.replace(/\/+$/,"");
-  if (location.origin && location.origin.startsWith("http")) return location.origin;
-  return "http://localhost:8088";
-}
-
-// Resize canvas to fill grid row
-function resizeCanvas(){
-  dpr = window.devicePixelRatio || 1;
-  const rect = CANVAS.getBoundingClientRect();
-  CANVAS.width  = Math.max(1, Math.round(rect.width  * dpr));
-  CANVAS.height = Math.max(1, Math.round(rect.height * dpr));
-  CTX.setTransform(1,0,0,1,0,0);
-}
-
-// Mapping read
-function readMapping(){
-  return {
-    zoom: clamp(parseFloat(zoomEl.value) || baked.zoom, 0.25, 8),
-    cmPerPx: clamp(parseFloat(cmppEl.value) || baked.cmPerPx, 1, 100000),
-    centerX: parseFloat(cxEl.value) || baked.centerX,
-    centerY: parseFloat(cyEl.value) || baked.centerY,
-    swapXY: LOCK_MAPPING_AXES ? baked.swapXY : !!swapXYEl.checked,
-    flipX:  LOCK_MAPPING_AXES ? baked.flipX  : !!flipXEl.checked,
-    flipY:  LOCK_MAPPING_AXES ? baked.flipY  : !!flipYEl.checked,
-    canvasW: CANVAS.width,
-    canvasH: CANVAS.height,
-    imgW: mapImg.naturalWidth  || 1024,
-    imgH: mapImg.naturalHeight || 1024,
-    cx: CANVAS.width * 0.5,
-    cy: CANVAS.height * 0.5
+  // --------- UI refs ---------
+  const toolbarEl   = document.getElementById("toolbar");
+  const collapseBtn = document.getElementById("collapseBtn");
+  const tabs        = Array.from(document.querySelectorAll(".tabs .tab"));
+  const tabPages    = {
+    general: document.getElementById("tab-general"),
+    players: document.getElementById("tab-players"),
   };
-}
 
-// World->screen (center only affects blips), then add image pan
-function worldToScreen(wx, wy, m = readMapping()){
-  let dx = wx - m.centerX;
-  let dy = wy - m.centerY;
+  const mapSelEl    = document.getElementById("mapSel");
+  const btnRescan   = document.getElementById("btnRescan");
+  const serverUrlEl = document.getElementById("serverUrl");
+  const btnConn     = document.getElementById("btnConnect");
+  const btnSaveMap  = document.getElementById("btnSaveMap");
+  const statusEl    = document.getElementById("status");
 
-  let imDX = dx / m.cmPerPx;
-  let imDY = dy / m.cmPerPx;
+  // General controls
+  const zoomEl      = document.getElementById("zoom");
+  const inScaleEl   = document.getElementById("inScale");
+  const yFlipEl     = document.getElementById("yFlip");
+  const offXEl      = document.getElementById("offX");
+  const offYEl      = document.getElementById("offY");
 
-  if (m.swapXY){ const t = imDX; imDX = imDY; imDY = t; }
-  if (m.flipX) imDX = -imDX;
-  if (m.flipY) imDY = -imDY;
+  // Player settings
+  const fSelfEl    = document.getElementById("fSelf");
+  const fPMCsEl    = document.getElementById("fPMCs");
+  const fBotsEl    = document.getElementById("fBots");
+  const fDeadEl    = document.getElementById("fDead");
+  const maxRangeEl = document.getElementById("maxRange");
+  const szSelfEl   = document.getElementById("szSelf");
+  const szPMCEl    = document.getElementById("szPMC");
+  const szBotEl    = document.getElementById("szBot");
+  const szDeadEl   = document.getElementById("szDead");
+  const colSelfEl  = document.getElementById("colSelf");
+  const colPMCEl   = document.getElementById("colPMC");
+  const colBotEl   = document.getElementById("colBot");
+  const colDeadEl  = document.getElementById("colDead");
 
-  const x = m.cx + imDX * m.zoom + imgPan.x;
-  const y = m.cy + imDY * m.zoom + imgPan.y;
-  return [x,y];
-}
+  let dpr = window.devicePixelRatio || 1;
 
-// Draw one frame (map first, then blips)
-function drawFrame(frame){
-  CTX.setTransform(1,0,0,1,0,0);
-  CTX.clearRect(0,0,CANVAS.width,CANVAS.height);
+  // Connection state
+  let es=null, pollTimer=null;
+  let lastFrame = null;
 
-  const m = readMapping();
+  // Map state
+  let mapList = [];
+  let activeMap = null;
+  let mapImg = new Image();
+  let imgPan = { x:0, y:0 };
 
-  // Map cover render
-  if (mapImg.complete && mapImg.naturalWidth){
-    const cover = Math.max(m.canvasW/m.imgW, m.canvasH/m.imgH);
-    const s = cover * m.zoom;
-    const dw = m.imgW * s, dh = m.imgH * s;
-    const dx = m.cx - dw/2 + imgPan.x;
-    const dy = m.cy - dh/2 + imgPan.y;
-    CTX.drawImage(mapImg, 0,0,m.imgW,m.imgH, dx,dy,dw,dh);
-  } else {
-    // fallback grid
+  // --------- Per-map config ---------
+  const cfgKey = (name)=> `wr.mapcfg.${name}`;
+  const defaultCfg = ()=> ({
+    inScale: 33.120,
+    zoom: 0.5,
+    yFlip: false,
+    file: null,
+    worldOffsetCm: { x: 0, y: 0 }
+  });
+
+  function mergeCfg(base, override){
+    if (!override) return base;
+    const out = { ...base };
+    if (typeof override.inScale === "number" && isFinite(override.inScale) && override.inScale > 0) out.inScale = override.inScale;
+    if (typeof override.zoom === "number"   && isFinite(override.zoom))                               out.zoom    = override.zoom;
+    if (typeof override.yFlip === "boolean")                                                         out.yFlip   = override.yFlip;
+    if (override.worldOffsetCm && typeof override.worldOffsetCm.x==="number" && typeof override.worldOffsetCm.y==="number"){
+      out.worldOffsetCm = { x: override.worldOffsetCm.x, y: override.worldOffsetCm.y };
+    }
+    if (typeof override.file === "string") out.file = override.file;
+    return out;
+  }
+
+  function loadCfg(name){
+    try{
+      const raw = localStorage.getItem(cfgKey(name));
+      const cfg = raw ? JSON.parse(raw) : defaultCfg();
+      if (!(cfg.inScale > 0)) cfg.inScale = 33.120;
+      if (typeof cfg.zoom !== "number") cfg.zoom = 0.5;
+      if (typeof cfg.yFlip !== "boolean") cfg.yFlip = false;
+      if (!cfg.worldOffsetCm || typeof cfg.worldOffsetCm.x!=="number" || typeof cfg.worldOffsetCm.y!=="number")
+        cfg.worldOffsetCm = { x: 0, y: 0 };
+      return cfg;
+    }catch{ return defaultCfg(); }
+  }
+  function saveCfg(name, cfg){
+    try{ localStorage.setItem(cfgKey(name), JSON.stringify(cfg)); }catch{}
+  }
+
+  function urlDirname(url){
+    const q = url.split("?")[0].split("#")[0];
+    const idx = q.lastIndexOf("/");
+    return idx >= 0 ? q.slice(0, idx) : "";
+  }
+  function joinUrl(dir, file){
+    if (!dir) return `/${file.replace(/^\/+/,"")}`;
+    return `${dir.replace(/\/+$/,"")}/${file.replace(/^\/+/,"")}`;
+  }
+
+  async function fetchJsonNoThrow(url, init){
+    try{
+      const r = await fetch(url, Object.assign({ cache:"no-store" }, init || {}));
+      if (!r.ok) return null;
+      return await r.json();
+    }catch{ return null; }
+  }
+
+  async function loadSidecarForMap(mapMeta){
+    if (!mapMeta) return null;
+    const url = mapMeta.url || ("/" + (mapMeta.file || ""));
+    const dir = urlDirname(url);
+    const name = mapMeta.name;
+
+    const mapCfgUrl = joinUrl(dir, `${name}.json`);
+    const exact = await fetchJsonNoThrow(mapCfgUrl);
+    if (exact) return { cfg: exact, source: mapCfgUrl };
+
+    const defaultUrl = joinUrl(dir, `default.json`);
+    const def = await fetchJsonNoThrow(defaultUrl);
+    if (def) return { cfg: def, source: defaultUrl };
+
+    return null;
+  }
+
+  // --------- Canvas & view ---------
+  function resizeCanvas(){
+    dpr = window.devicePixelRatio || 1;
+    const rect = CANVAS.getBoundingClientRect();
+    CANVAS.width  = Math.max(1, Math.round(rect.width  * dpr));
+    CANVAS.height = Math.max(1, Math.round(rect.height * dpr));
+    CTX.setTransform(1,0,0,1,0,0);
+  }
+
+  function imageDrawRect(v){
+    const sw = v.imgW, sh = v.imgH;
+    const cover = Math.max(v.canvasW / sw, v.canvasH / sh);
+    const s  = cover * v.zoom;
+    const dw = sw * s, dh = sh * s;
+    const dx = v.cx - dw/2 + imgPan.x;
+    const dy = v.cy - dh/2 + imgPan.y;
+    return { dx, dy, s, dw, dh };
+  }
+
+  function readView(){
+    const cfg = activeMap ? loadCfg(activeMap.name) : defaultCfg();
+    const z = clamp(parseFloat(zoomEl?.value ?? cfg.zoom) || cfg.zoom, 0.05, 10);
+    const scl = Math.max(0.001, parseFloat(inScaleEl?.value ?? cfg.inScale) || cfg.inScale);
+    return {
+      zoom: z,
+      canvasW: CANVAS.width,
+      canvasH: CANVAS.height,
+      cx: CANVAS.width * 0.5,
+      cy: CANVAS.height * 0.5,
+      imgW: mapImg.naturalWidth  || 1,
+      imgH: mapImg.naturalHeight || 1,
+      inScale: scl,
+      yFlip: cfg.yFlip,
+      worldOffsetCm: cfg.worldOffsetCm
+    };
+  }
+
+  // --------- Mapping math ---------
+  function worldToImagePx(x, y, v){
+    const ox = v.worldOffsetCm?.x || 0;
+    const oy = v.worldOffsetCm?.y || 0;
+    const sx = (x + ox) / v.inScale;
+    const syRaw = (y + oy) / v.inScale;
+    const sy = v.yFlip ? -syRaw : syRaw;
+    return [ sx, sy ];
+  }
+
+  // --------- Drawing helpers ---------
+  function drawSelfMarker(x,y,r,deg,col){
+    const a = (deg * Math.PI / 180);
+    const rr = r*dpr;
+    const p0 = { x: x + Math.sin(a) * rr,            y: y - Math.cos(a) * rr            };
+    const p1 = { x: x - Math.cos(a) * rr * 0.7,      y: y - Math.sin(a) * rr * 0.7      };
+    const p2 = { x: x + Math.cos(a) * rr * 0.7,      y: y + Math.sin(a) * rr * 0.7      };
+    CTX.fillStyle = col;
+    CTX.beginPath(); CTX.moveTo(p0.x,p0.y); CTX.lineTo(p1.x,p1.y); CTX.lineTo(p2.x,p2.y); CTX.closePath(); CTX.fill();
+    CTX.lineWidth = 1*dpr; CTX.strokeStyle="rgba(0,0,0,.9)"; CTX.stroke();
+  }
+
+  function drawEntityCircleWithHeading(x,y,r,deg,color,arrow){
+    CTX.fillStyle = color;
+    CTX.beginPath(); CTX.arc(x,y,r*dpr,0,Math.PI*2); CTX.fill();
+    const a = (deg||0) * Math.PI/180;
+    const L = r * 1.6 * dpr;
+    CTX.strokeStyle = "rgba(0,0,0,.9)";
+    CTX.lineWidth = 1.5*dpr;
+    CTX.beginPath();
+    CTX.moveTo(x, y);
+    CTX.lineTo(x + Math.sin(a) * L, y - Math.cos(a) * L);
+    CTX.stroke();
+    if (arrow){
+      CTX.fillStyle = color;
+      const ay = y - (r*1.9*dpr);
+      const ax = x;
+      const s = 3*dpr;
+      CTX.beginPath();
+      if (arrow === 'up'){
+        CTX.moveTo(ax, ay - s);
+        CTX.lineTo(ax - s, ay + s);
+        CTX.lineTo(ax + s, ay + s);
+      } else {
+        CTX.moveTo(ax, ay + s);
+        CTX.lineTo(ax - s, ay - s);
+        CTX.lineTo(ax + s, ay - s);
+      }
+      CTX.closePath(); CTX.fill();
+      CTX.strokeStyle="rgba(0,0,0,.9)"; CTX.lineWidth=1*dpr; CTX.stroke();
+    }
+  }
+
+  function drawGridBackdrop(){
     CTX.fillStyle="#000"; CTX.fillRect(0,0,CANVAS.width,CANVAS.height);
     CTX.strokeStyle="rgba(255,255,255,0.08)"; CTX.lineWidth=1*dpr;
     const step = Math.max(24*dpr, Math.min(CANVAS.width, CANVAS.height)/16);
@@ -164,211 +224,329 @@ function drawFrame(frame){
     for (let y=0; y<=CANVAS.height; y+=step){ CTX.beginPath(); CTX.moveTo(0,y); CTX.lineTo(CANVAS.width,y); CTX.stroke(); }
   }
 
-  if (!frame || frame.ok !== true) return;
+  function drawFrame(frame){
+    try{
+      CTX.setTransform(1,0,0,1,0,0);
+      CTX.clearRect(0,0,CANVAS.width,CANVAS.height);
+      const v = readView();
 
-  // Filters & icons
-  const showSelf = !!(fSelfEl?.checked);
-  const showPMCs = !!(fPMCsEl?.checked);
-  const showBots = !!(fBotsEl?.checked);
-  const showDead = !!(fDeadEl?.checked);
-  const maxRangeM = Math.max(0, parseFloat(maxRangeEl?.value || "0"));
+      if (!(mapImg.complete && mapImg.naturalWidth)) {
+        drawGridBackdrop();
+        return;
+      }
 
-  const rSelf = clamp(parseInt(szSelfEl?.value || "7",10), 2, 30);
-  const rPMC  = clamp(parseInt(szPMCEl?.value  || "5",10), 2, 30);
-  const rBot  = clamp(parseInt(szBotEl?.value  || "4",10), 2, 30);
-  const rDead = clamp(parseInt(szDeadEl?.value || "6",10), 2, 30);
+      const R = imageDrawRect(v);
+      CTX.drawImage(mapImg, 0,0, v.imgW,v.imgH, R.dx, R.dy, R.dw, R.dh);
 
-  const cSelf = colSelfEl?.value || "#19ff6a";
-  const cPMC  = colPMCEl?.value  || "#ff4a4a";
-  const cBot  = colBotEl?.value  || "#0db1ff";
-  const cDead = colDeadEl?.value || "#ffd600";
+      if (frame && frame.ok === true){
+        const showSelf = !!(fSelfEl?.checked);
+        const showPMCs = !!(fPMCsEl?.checked);
+        const showBots = !!(fBotsEl?.checked);
+        const showDead = !!(fDeadEl?.checked);
 
-  // self first (for range)
-  let selfX=null, selfY=null;
-  if (frame.self){
-    selfX = frame.self.x; selfY = frame.self.y;
-    if (showSelf){
-      const [sx, sy] = worldToScreen(selfX, selfY, m);
-      drawSelf(sx, sy, rSelf, cSelf);
+        const useRange  = true;
+        const maxRangeM = Math.max(0, parseFloat(maxRangeEl?.value || "0"));
+
+        const rSelf = clamp(parseInt(szSelfEl?.value || "8",10), 2, 30);
+        const rPMC  = clamp(parseInt(szPMCEl?.value  || "6",10), 2, 30);
+        const rBot  = clamp(parseInt(szBotEl?.value  || "5",10), 2, 30);
+        const rDead = clamp(parseInt(szDeadEl?.value || "6",10), 2, 30);
+
+        const cSelf = colSelfEl?.value || "#19ff6a";
+        const cPMC  = colPMCEl?.value  || "#ff4a4a";
+        const cBot  = colBotEl?.value  || "#0db1ff";
+        const cDead = colDeadEl?.value || "#ffd600";
+
+        let selfZ = 0;
+        if (frame.self && typeof frame.self.x==="number" && typeof frame.self.y==="number"){
+          selfZ = (typeof frame.self.z === "number") ? frame.self.z : 0;
+          if (showSelf){
+            const img = worldToImagePx(frame.self.x, frame.self.y, v);
+            const yaw = (typeof frame.self.yaw === "number") ? frame.self.yaw : 0;
+            const sx = R.dx + img[0]*R.s, sy = R.dy + img[1]*R.s;
+            drawSelfMarker(sx, sy, rSelf, yaw, cSelf);
+          }
+        }
+
+        if (Array.isArray(frame.actors)){
+          const selfId = frame.self?.id ?? frame.self?.pawn ?? null;
+          for (const a of frame.actors){
+            if (!a || typeof a.x!=="number" || typeof a.y!=="number") continue;
+            if (a.self === true) continue;
+            if (selfId != null && (a.id === selfId || a.pawn === selfId)) continue;
+
+            if (useRange && maxRangeM > 0 && frame.self){
+              const dx = (a.x - frame.self.x), dy = (a.y - frame.self.y);
+              const distM = Math.hypot(dx,dy)/100; if (distM > maxRangeM) continue;
+            }
+
+            const img = worldToImagePx(a.x, a.y, v);
+            const x = R.dx + img[0]*R.s, y = R.dy + img[1]*R.s;
+
+            const yaw = (typeof a.yaw === "number") ? a.yaw : 0;
+            const az  = (typeof a.z   === "number") ? a.z   : 0;
+            const altArrow = (frame.self && Math.abs(az - selfZ) > 50) ? (az > selfZ ? 'up' : 'down') : null;
+
+            if (a.dead){ if (!showDead) continue; drawEntityCircleWithHeading(x,y,rDead, yaw, cDead, altArrow); continue; }
+            if (a.bot) { if (!showBots) continue; drawEntityCircleWithHeading(x,y,rBot,  yaw, cBot,  altArrow); }
+            else       { if (!showPMCs) continue; drawEntityCircleWithHeading(x,y,rPMC, yaw, cPMC, altArrow); }
+          }
+        }
+      }
+    } catch (err){
+      console.warn("[WebRadar] draw error:", err);
+      CTX.setTransform(1,0,0,1,0,0);
+      CTX.fillStyle="#000"; CTX.fillRect(0,0,CANVAS.width,CANVAS.height);
     }
   }
 
-  // actors
-  if (Array.isArray(frame.actors)){
-    for (const a of frame.actors){
-      if (maxRangeM > 0 && selfX !== null){
-        const dx = a.x - selfX, dy = a.y - selfY;
-        const distM = Math.hypot(dx,dy) / 100.0;
-        if (distM > maxRangeM) continue;
-      }
-      if (a.dead){
-        if (!showDead) continue;
-      } else if (a.bot){
-        if (!showBots) continue;
-      } else {
-        if (!showPMCs) continue;
-      }
-
-      const [x,y] = worldToScreen(a.x, a.y, m);
-      if (a.dead)      drawDiamond(x,y,rDead,cDead);
-      else if (a.bot)  drawCircle(x,y,rBot,cBot);
-      else             drawSquare(x,y,rPMC,cPMC);
-    }
+  // --------- Map loading & UI wiring ---------
+  function applyCfgToUI(name){
+    const cfg = loadCfg(name);
+    if (zoomEl)    zoomEl.value    = (cfg.zoom ?? 0.5);
+    if (inScaleEl) inScaleEl.value = (cfg.inScale ?? 33.120).toFixed(3);
+    if (yFlipEl)   yFlipEl.checked = !!cfg.yFlip;
+    if (offXEl)    offXEl.value    = Math.round(cfg.worldOffsetCm?.x ?? 0);
+    if (offYEl)    offYEl.value    = Math.round(cfg.worldOffsetCm?.y ?? 0);
   }
-}
 
-// Primitives
-function drawSelf(x,y,r,col){
-  const rr = r*dpr;
-  CTX.fillStyle = col;
-  CTX.beginPath();
-  CTX.moveTo(x, y-rr);
-  CTX.lineTo(x+rr*0.85, y+rr*0.6);
-  CTX.lineTo(x-rr*0.85, y+rr*0.6);
-  CTX.closePath();
-  CTX.fill();
-}
-function drawCircle(x,y,r,col){
-  CTX.fillStyle = col;
-  CTX.beginPath();
-  CTX.arc(x,y,r*dpr,0,Math.PI*2);
-  CTX.fill();
-}
-function drawSquare(x,y,half,col){
-  const h = half*dpr;
-  CTX.fillStyle = col;
-  CTX.fillRect(x-h,y-h,h*2,h*2);
-  CTX.strokeStyle="rgba(0,0,0,.9)";
-  CTX.lineWidth=1*dpr;
-  CTX.strokeRect(x-h,y-h,h*2,h*2);
-}
-function drawDiamond(x,y,r,col){
-  const rr = r*dpr;
-  CTX.fillStyle = col;
-  CTX.beginPath();
-  CTX.moveTo(x,   y-rr);
-  CTX.lineTo(x+rr,y);
-  CTX.lineTo(x,   y+rr);
-  CTX.lineTo(x-rr,y);
-  CTX.closePath();
-  CTX.fill();
-  CTX.strokeStyle="rgba(0,0,0,.9)";
-  CTX.lineWidth=1*dpr;
-  CTX.stroke();
-}
+  function loadMapImage(fileOrUrl){
+    imgPan.x = 0; imgPan.y = 0;
+    mapImg = new Image();
+    mapImg.onload  = ()=> drawFrame(lastFrame);
+    mapImg.onerror = ()=> { console.warn("[WebRadar] failed to load", fileOrUrl); drawFrame(lastFrame); };
+    mapImg.src = fileOrUrl;
+  }
 
-// Drag to pan (image+blips)
-let isDragging=false, dragStart={x:0,y:0}, panStart={x:0,y:0};
-CANVAS.addEventListener("mousedown", (e)=>{
-  isDragging = true; CANVAS.classList.add("dragging");
-  dragStart = clientToCanvas(e);
-  panStart = { x: imgPan.x, y: imgPan.y };
-});
-window.addEventListener("mouseup", ()=>{
-  if (isDragging){ isDragging=false; CANVAS.classList.remove("dragging"); }
-});
-window.addEventListener("mousemove", (e)=>{
-  if (!isDragging) return;
-  const cur = clientToCanvas(e);
-  imgPan.x = panStart.x + (cur.x - dragStart.x);
-  imgPan.y = panStart.y + (cur.y - dragStart.y);
-  drawFrame(lastFrame);
-});
+  async function setActiveMapByName(name){
+    const m = mapList.find(x => x.name === name) || mapList[0];
+    if (!m) return;
+    activeMap = m;
 
-// Wheel zoom (about canvas center)
-CANVAS.addEventListener("wheel", (e)=>{
-  e.preventDefault();
-  const m = readMapping();
-  const z = clamp(m.zoom * (e.deltaY < 0 ? 1.1 : 0.9), 0.25, 8);
-  if (z === m.zoom) return;
-  zoomEl.value = z.toFixed(2);
-  drawFrame(lastFrame);
-}, { passive:false });
+    let cfg = loadCfg(m.name);
+    if (!cfg.file) { cfg.file = m.file || ""; }
 
-// Map selection hook
-mapSelEl?.addEventListener("change", ()=>{
-  activeKey = mapSelEl.value || "Valley";
-  baked = PRESETS[activeKey];
-  applyPreset(baked);
-  loadMap(baked.map);
-  drawFrame(lastFrame);
-});
+    const side = await loadSidecarForMap(m);
+    if (side && side.cfg){
+      cfg = mergeCfg(cfg, side.cfg);
+      saveCfg(m.name, cfg);
+      statusFlash(`loaded ${side.source}`);
+    }
 
-// Connect buttons
-btnConn.addEventListener("click", ()=> connected ? disconnect() : connect());
-btnCopy.addEventListener("click", copyMapping);
+    applyCfgToUI(m.name);
+    loadMapImage(m.url || ("/" + (m.file || "")));
+  }
 
-// Redraw on control changes
-[
-  zoomEl, cmppEl, cxEl, cyEl, swapXYEl, flipXEl, flipYEl,
-  fSelfEl, fPMCsEl, fBotsEl, fDeadEl, maxRangeEl,
-  szSelfEl, szPMCEl, szBotEl, szDeadEl,
-  colSelfEl, colPMCEl, colBotEl, colDeadEl
-].forEach(el => el?.addEventListener("input", ()=> drawFrame(lastFrame)));
+  async function refreshMapList(){
+    try{
+      const base = baseUrl();
+      const r = await fetch(base + "/api/maps", { cache:"no-store" });
+      if (!r.ok) throw 0;
+      const arr = await r.json();
+      if (!Array.isArray(arr) || arr.length === 0) throw 0;
+      mapList = arr.map(m => ({ name: m.name, file: m.file, url: m.url || ("/" + m.file) }));
+    }catch{
+      mapList = [
+        { name:"Farm",   file:"Farm.png",   url:"/Farm/Farm.png"   },
+        { name:"Valley", file:"Valley.png", url:"/Valley/Valley.png" }
+      ];
+    }
 
-// SSE + polling
-function connect(){
-  const base = baseUrl();
-  try { es = new EventSource(base + "/stream"); } catch { return startPolling(base); }
-  btnConn.textContent="Connecting¡­"; statusEl.textContent="connecting¡­";
-  es.addEventListener("open", ()=>{
-    connected=true; statusEl.textContent="connected (SSE)"; btnConn.textContent="Disconnect";
-    if (pollTimer){ clearInterval(pollTimer); pollTimer=null; }
-  });
-  es.addEventListener("error", ()=>{
+    if (mapSelEl){
+      mapSelEl.innerHTML = "";
+      for (const m of mapList){
+        const opt = document.createElement("option");
+        opt.value = m.name; opt.textContent = m.name;
+        mapSelEl.appendChild(opt);
+      }
+      mapSelEl.value = mapList[0]?.name || "";
+    }
+    if (mapList.length) await setActiveMapByName(mapSelEl.value);
+  }
+
+  function persistUIToCfg(){
+    if (!activeMap) return;
+    const cfg = loadCfg(activeMap.name);
+    cfg.zoom    = clamp(parseFloat(zoomEl.value)||cfg.zoom, 0.05, 10);
+    cfg.inScale = Math.max(0.001, parseFloat(inScaleEl.value) || cfg.inScale);
+    cfg.yFlip   = !!yFlipEl.checked;
+    cfg.file    = activeMap.file;
+
+    const ox = offXEl ? parseFloat(offXEl.value) : (cfg.worldOffsetCm?.x ?? 0);
+    const oy = offYEl ? parseFloat(offYEl.value) : (cfg.worldOffsetCm?.y ?? 0);
+    cfg.worldOffsetCm = { x: isFinite(ox) ? ox : 0, y: isFinite(oy) ? oy : 0 };
+
+    saveCfg(activeMap.name, cfg);
+  }
+
+  // --------- Save Map Setup ---------
+  async function saveMapSetup(){
+    if (!activeMap){ statusFlash("no active map"); return; }
+    const cfg = loadCfg(activeMap.name);
+    const url = activeMap.url || ("/" + (activeMap.file || ""));
+    const dir = urlDirname(url);
+    const name = activeMap.name;
+    const sidecarPath = joinUrl(dir, `${name}.json`);
+
+    const payload = JSON.stringify({
+      file: cfg.file || activeMap.file,
+      inScale: cfg.inScale,
+      yFlip: cfg.yFlip,
+      worldOffsetCm: cfg.worldOffsetCm,
+      zoom: cfg.zoom
+    }, null, 2);
+
+    let ok = false;
+    try{
+      const r = await fetch(sidecarPath, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: payload
+      });
+      ok = r.ok;
+    }catch{}
+
+    if (!ok){
+      try{
+        const r = await fetch(`/api/mapcfg/${encodeURIComponent(name)}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ dir, name, config: JSON.parse(payload) })
+        });
+        ok = r.ok;
+      }catch{}
+    }
+
+    if (!ok){
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([payload], {type:"application/json"}));
+      a.download = `${name}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      statusFlash(`downloaded ${name}.json (place next to the map image)`);
+      return;
+    }
+
+    statusFlash(`saved ${sidecarPath}`);
+  }
+
+  // --------- Connect/poll ---------
+  function baseUrl(){
+    const typed = serverUrlEl?.value?.trim() || "";
+    if (/^https?:/i.test(typed)) return typed.replace(/\/+$/,"");
+    if (location.origin && /^https?:/i.test(location.origin)) return location.origin;
+    return "http://localhost:8088";
+  }
+
+  function connect(){
+    const base = baseUrl();
+    try { es = new EventSource(base + "/stream"); }
+    catch { return startPolling(base); }
+    statusEl.textContent="connecting¡­"; btnConn.textContent="Connecting¡­";
+    es.addEventListener("open", ()=>{
+      statusEl.textContent="connected (SSE)"; btnConn.textContent="Disconnect";
+      if (pollTimer){ clearInterval(pollTimer); pollTimer=null; }
+    });
+    es.addEventListener("error", ()=>{
+      if (es){ es.close(); es=null; }
+      startPolling(base);
+    });
+    es.addEventListener("frame", ev=>{
+      try { lastFrame = JSON.parse(ev.data); } catch { return; }
+      drawFrame(lastFrame);
+    });
+  }
+
+  function startPolling(base){
+    if (pollTimer) clearInterval(pollTimer);
+    statusEl.textContent="connected (poll)"; btnConn.textContent="Disconnect";
+    const tick = ()=> {
+      fetch(base + "/api/frame", { cache:"no-store" })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(j => { lastFrame=j; drawFrame(lastFrame); })
+        .catch(()=>{});
+    };
+    tick(); pollTimer = setInterval(tick, 100);
+  }
+
+  function disconnect(){
     if (es){ es.close(); es=null; }
-    startPolling(base);
+    if (pollTimer){ clearInterval(pollTimer); pollTimer=null; }
+    statusEl.textContent="disconnected"; btnConn.textContent="Connect";
+  }
+
+  // --------- Interaction ---------
+  let isDragging=false, dragStart={x:0,y:0}, panStart={x:0,y:0};
+  CANVAS.addEventListener("mousedown", (e)=>{ isDragging=true; CANVAS.classList.add("dragging"); dragStart=clientToCanvas(e); panStart={...imgPan}; });
+  window.addEventListener("mouseup", ()=>{ if (isDragging){ isDragging=false; CANVAS.classList.remove("dragging"); }});
+  window.addEventListener("mousemove", (e)=>{
+    if (!isDragging) return;
+    const cur = clientToCanvas(e);
+    imgPan.x = panStart.x + (cur.x - dragStart.x);
+    imgPan.y = panStart.y + (cur.y - dragStart.y);
+    drawFrame(lastFrame);
   });
-  es.addEventListener("frame", ev=>{
-    try { lastFrame = JSON.parse(ev.data); drawFrame(lastFrame); } catch{}
+  CANVAS.addEventListener("wheel", (e)=>{
+    e.preventDefault();
+    const z = clamp((parseFloat(zoomEl.value)||0.5) * (e.deltaY < 0 ? 1.1 : 0.9), 0.25, 10);
+    zoomEl.value = z.toFixed(2);
+    persistUIToCfg();
+    drawFrame(lastFrame);
+  }, { passive:false });
+
+  // --------- Toolbar UX ---------
+  collapseBtn?.addEventListener("click", ()=>{
+    const collapsed = toolbarEl.classList.toggle("collapsed");
+    collapseBtn.textContent = collapsed ? "?" : "?";
+    // Force a canvas resize because the grid row height changed
+    resizeCanvas();
+    drawFrame(lastFrame);
   });
-}
-function startPolling(base){
-  if (pollTimer) clearInterval(pollTimer);
-  connected=true; statusEl.textContent="connected (poll)"; btnConn.textContent="Disconnect";
-  const tick = ()=>{
-    fetch(base + "/api/frame", { cache:"no-store" })
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then(j => { lastFrame=j; drawFrame(lastFrame); })
-      .catch(()=>{});
-  };
-  tick(); pollTimer = setInterval(tick, 100);
-}
-function disconnect(){
-  if (es){ es.close(); es=null; }
-  if (pollTimer){ clearInterval(pollTimer); pollTimer=null; }
-  connected=false; statusEl.textContent="disconnected"; btnConn.textContent="Connect";
-}
 
-// Utilities
-function clientToCanvas(e){
-  const r = CANVAS.getBoundingClientRect();
-  return { x:(e.clientX - r.left)*dpr, y:(e.clientY - r.top)*dpr };
-}
-function clamp(v,lo,hi){ return Math.max(lo, Math.min(hi, v)); }
+  tabs.forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      tabs.forEach(b=> b.classList.remove("active"));
+      btn.classList.add("active");
+      const key = btn.dataset.tab;
+      Object.entries(tabPages).forEach(([k,el])=>{
+        if (k === key) el.classList.add("active"); else el.classList.remove("active");
+      });
+      // Canvas size unaffected, but redraw for UX
+      drawFrame(lastFrame);
+    });
+  });
 
-function copyMapping(){
-  const m = readMapping();
-  const cfg = {
-    map: baked.map,
-    cmPerPx: m.cmPerPx,
-    centerX: m.centerX,
-    centerY: m.centerY,
-    swapXY: m.swapXY,
-    flipX: m.flipX,
-    flipY: m.flipY,
-    zoom: m.zoom
-  };
-  const txt = JSON.stringify(cfg, null, 2);
-  console.log("[WebRadar mapping]", cfg);
-  navigator.clipboard.writeText(txt).catch(()=>{});
-  statusEl.textContent = "mapping copied";
-  setTimeout(()=> statusEl.textContent = connected ? "connected" : "disconnected", 1200);
-}
+  // buttons & inputs
+  btnConn?.addEventListener("click", ()=> (es||pollTimer) ? disconnect() : connect());
+  btnRescan?.addEventListener("click", ()=> refreshMapList());
+  btnSaveMap?.addEventListener("click", ()=> saveMapSetup());
 
-// Kick off
-applyPreset(baked);
-loadMap(baked.map);
-resizeCanvas();
-drawFrame(null); // draw map (or grid) even before data arrives
-window.addEventListener("resize", ()=>{ resizeCanvas(); drawFrame(lastFrame); });
+  mapSelEl?.addEventListener("change", ()=>{ setActiveMapByName(mapSelEl.value).then(()=> drawFrame(lastFrame)); });
+  for (const el of [zoomEl, inScaleEl, yFlipEl, offXEl, offYEl,
+                    fSelfEl, fPMCsEl, fBotsEl, fDeadEl, maxRangeEl,
+                    szSelfEl, szPMCEl, szBotEl, szDeadEl,
+                    colSelfEl, colPMCEl, colBotEl, colDeadEl]) {
+    el?.addEventListener("input",  ()=>{ persistUIToCfg(); drawFrame(lastFrame); });
+    el?.addEventListener("change", ()=>{ persistUIToCfg(); drawFrame(lastFrame); });
+  }
+
+  // utils
+  function clientToCanvas(e){ const r = CANVAS.getBoundingClientRect(); return { x:(e.clientX - r.left)*dpr, y:(e.clientY - r.top)*dpr }; }
+  function clamp(v,lo,hi){ return Math.max(lo, Math.min(hi, v)); }
+  function statusFlash(txt){
+    if (!statusEl) return;
+    statusEl.textContent = txt;
+    setTimeout(()=> statusEl.textContent = (es||pollTimer) ? "connected" : "disconnected", 1400);
+  }
+
+  // kickoff
+  resizeCanvas();
+  window.addEventListener("resize", ()=>{ resizeCanvas(); drawFrame(lastFrame); });
+
+  if (serverUrlEl) {
+    serverUrlEl.value = (location.origin && /^https?:/i.test(location.origin)) ? location.origin : "http://localhost:8088";
+  }
+
+  refreshMapList().then(()=> drawFrame(null));
+})();
