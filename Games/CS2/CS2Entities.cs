@@ -146,11 +146,8 @@ namespace MamboDMA.Games.CS2
                 lock (Sync)
                     CachedEntities = tmp;
             }
-            catch (Exception ex)
-            {
-                Logger.Error($"[CacheEntities] Exception: {ex.Message}\n{ex.StackTrace}");
-                lock (Sync) CachedEntities = [];
-            }
+            // when client closes, it throws an exception
+            catch { }
         }
 
         private static void HighResDelay(int targetMs)
