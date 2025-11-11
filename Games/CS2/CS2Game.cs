@@ -1,4 +1,5 @@
 ﻿using ImGuiNET;
+using MamboDMA.Games.ABI;
 using MamboDMA.Services;
 using System.Numerics;
 
@@ -12,6 +13,7 @@ namespace MamboDMA.Games.CS2
         private bool _running;
 
         // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ UI config ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        private static bool _drawLines = true;
         private static bool _drawBoxes = true;
         private static bool _drawNames = true;
         private static bool _drawDistance = true;
@@ -19,32 +21,25 @@ namespace MamboDMA.Games.CS2
         private static bool _showDebug = false;
         private static bool _showEntityDebug = false;
 
-        private static Vector4 _colorFriendly = new(1f, 0.25f, 0.25f, 1f);
-        private static Vector4 _colorEnemy = new(0f, 0.6f, 1f, 1f);
+        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ TODO: put to Config Class ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+        // Label colors
+        public Vector4 ColorPlayer = new(1f, 0.25f, 0.25f, 1f);
+        public Vector4 ColorBot = new(0f, 0.6f, 1f, 1f);
 
-        private const string _cs2Exe = "cs2.exe";
+        // ESP colors
+        public Vector4 ColorBoxVisible = new(0.20f, 1.00f, 0.20f, 1f);
+        public Vector4 ColorBoxInvisible = new(1.00f, 0.50f, 0.00f, 1f);
+        public Vector4 ColorSkelVisible = new(1.00f, 1.00f, 1.00f, 1f);
+        public Vector4 ColorSkelInvisible = new(0.70f, 0.70f, 0.70f, 1f);
+        public Vector4 ColorLineVisible = new(0.20f, 1.00f, 0.20f, 1f);
+        public Vector4 ColorLineInvisible = new(1.00f, 0.50f, 0.00f, 1f);
+        // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ TODO: put to Config Class ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+
+        private string _cs2Exe = "cs2.exe";
         public void Draw(ImGuiWindowFlags winFlags)
         {
-            if (!ImGui.Begin("Counter Strike 2", winFlags | ImGuiWindowFlags.AlwaysAutoResize))
-            {
-                ImGui.End();
-                return;
-            }
-
             bool vmmReady = DmaMemory.IsVmmReady;
             bool attached = DmaMemory.IsAttached;
-
-            ImGui.TextDisabled("Quick Setup");
-            if (!vmmReady)
-            {
-                if (ImGui.Button("Init VMM")) VmmService.InitOnly();
-                ImGui.SameLine(); ImGui.TextDisabled("¡û initialize before attaching");
-            }
-            else if (!attached)
-            {
-                if (ImGui.Button($"Attach ({_cs2Exe})")) Attach();
-                ImGui.SameLine(); ImGui.TextDisabled("¡û attaches without process picker");
-            }
 
             var statusCol = (attached && _running) ? new Vector4(0, 0.8f, 0, 1) :
                             attached ? new Vector4(0.85f, 0.75f, 0.15f, 1) :
@@ -54,48 +49,130 @@ namespace MamboDMA.Games.CS2
                          : "Not attached");
 
             ImGui.Separator();
-            ImGui.Checkbox("Draw Boxes", ref _drawBoxes);
-            ImGui.Checkbox("Draw Names", ref _drawNames);
-            ImGui.Checkbox("Draw Distance", ref _drawDistance);
-            ImGui.Checkbox("Draw Skeletons", ref _drawSkeletons);
-            ImGui.Checkbox("Show Debug Info", ref _showDebug);
 
-            ImGui.Separator();
-            ImGui.Text("Base Colors (fallbacks, names)");
-            ImGui.ColorEdit4("Friendly", ref _colorFriendly);
-            ImGui.ColorEdit4("Enemy", ref _colorEnemy);
-
-            ImGui.Separator();
-
-            if (!attached) ImGui.BeginDisabled();
-            if (ImGui.Button(_running ? "Stop Threads" : "Start Threads"))
+            if (ImGui.BeginTabBar("CS2_Tabs", ImGuiTabBarFlags.NoCloseWithMiddleMouseButton))
             {
-                if (_running) Stop(); else Start();
-            }
-            if (!attached) ImGui.EndDisabled();
-
-            if (_showDebug)
-            {
-                ImGui.Separator();
-                ImGui.Text("©¤ Debug Info ©¤");
-                ImGui.Text($"clientBase: 0x{CS2Entities.clientBase:X}");
-                ImGui.Text($"entityListPtr: 0x{CS2Entities.entityListPtr:X}");
-                ImGui.Text("©¤ 64 controllers ©¤");
-                ImGui.Text($"listEntry: 0x{CS2Entities.listEntry:X}");
-                ImGui.Text($"controllerBase: 0x{CS2Entities.controllerBase:X}");
-                ImGui.Text($"playerPawn: 0x{CS2Entities.playerPawn:X}");
-                ImGui.Text($"listEntry2: 0x{CS2Entities.listEntry2:X}");
-                ImGui.Text($"addressBase: 0x{CS2Entities.addressBase:X}");
-                ImGui.Checkbox("Show Entity Debug Info", ref _showEntityDebug);
-
-                if (_showEntityDebug)
+                // MAIN
+                if (ImGui.BeginTabItem("Main"))
                 {
-                    DrawEntitiesDebugWindow();
+                    ImGui.TextDisabled("VMM & Attach");
+                    if (!vmmReady)
+                    {
+                        if (ImGui.Button("Init VMM")) VmmService.InitOnly();
+                        ImGui.SameLine(); ImGui.TextDisabled("¡û initialize before attaching");
+                    }
+                    else
+                    {
+                        ImGui.InputText("Process Name", ref _cs2Exe, 128);
+                        if (!attached)
+                        {
+                            if (ImGui.Button($"Attach ({_cs2Exe})")) Attach();
+                            ImGui.SameLine(); ImGui.TextDisabled("¡û attaches without process picker");
+                        }
+                    }
+
+                    ImGui.SameLine();
+                    if (ImGui.Button("Dispose VMM")) Dispose();
+
+                    ImGui.Separator();
+
+                    if (!attached) ImGui.BeginDisabled();
+                    if (ImGui.Button(_running ? "Stop Threads" : "Start Threads"))
+                    { if (_running) Stop(); else Start(); }
+                    if (!attached) ImGui.EndDisabled();
+
+                    ImGui.Separator();
+
+                    ImGui.EndTabItem();
+                }
+
+                // ESP
+                if (ImGui.BeginTabItem("ESP"))
+                {
+                    if (ImGui.CollapsingHeader("Basics", ImGuiTreeNodeFlags.DefaultOpen))
+                    {
+
+                        ImGui.Checkbox("Draw Boxes", ref _drawBoxes);
+                        ImGui.Checkbox("Draw Names", ref _drawNames);
+                        ImGui.Checkbox("Draw Distance", ref _drawDistance);
+                        ImGui.Checkbox("Draw Skeletons", ref _drawSkeletons);
+                        ImGui.Checkbox("Show Debug Info", ref _showDebug);
+
+                        // NOT IMPLEMENTED YET
+                        //ImGui.SliderFloat("Max Draw Distance (m)", ref cfg.MaxDistance, 50f, 3000f, "%.0f");
+                        //ImGui.SliderFloat("Skeleton Draw Distance (m)", ref cfg.MaxSkeletonDistance, 25f, 2000f, "%.0f");
+                    }
+
+                    ImGui.EndTabItem();
+                }
+
+                // NOT IMPLEMENTED YET TODO
+                // WEBRADAR
+                //if (ImGui.BeginTabItem("WebRadar"))
+                //{
+                //    WebRadarUI.DrawPanel();
+                //    ImGui.EndTabItem();
+                //}
+
+                // COLORS
+                if (ImGui.BeginTabItem("Colors"))
+                {
+                    ImGui.Text("ESP Colors");
+                    ImGui.ColorEdit4("Box Visible", ref ColorBoxVisible);
+                    ImGui.ColorEdit4("Box Invisible", ref ColorBoxInvisible);
+                    ImGui.ColorEdit4("Skel Visible", ref ColorSkelVisible);
+                    ImGui.ColorEdit4("Skel Invisible", ref ColorSkelInvisible);
+
+                    ImGui.Separator();
+                    ImGui.Text("Base Labels");
+                    ImGui.ColorEdit4("Player", ref ColorPlayer);
+                    ImGui.ColorEdit4("Bot", ref ColorBot);
+
+                    ImGui.EndTabItem();
+                }
+
+                if (_showDebug)
+                {
+                    ImGui.Separator();
+                    ImGui.Text("©¤ Debug Info ©¤");
+                    ImGui.Text($"clientBase: 0x{CS2Entities.clientBase:X}");
+                    ImGui.Text($"entityListPtr: 0x{CS2Entities.entityListPtr:X}");
+                    ImGui.Text("©¤ 64 controllers ©¤");
+                    ImGui.Text($"listEntry: 0x{CS2Entities.listEntry:X}");
+                    ImGui.Text($"controllerBase: 0x{CS2Entities.controllerBase:X}");
+                    ImGui.Text($"playerPawn: 0x{CS2Entities.playerPawn:X}");
+                    ImGui.Text($"listEntry2: 0x{CS2Entities.listEntry2:X}");
+                    ImGui.Text($"addressBase: 0x{CS2Entities.addressBase:X}");
+                    ImGui.Checkbox("Show Entity Debug Info", ref _showEntityDebug);
+
+                    if (_showEntityDebug)
+                    {
+                        DrawEntitiesDebugWindow();
+                    }
+
+                    if (_running)
+                    {
+                        CS2ESP.Render(
+                            _drawLines,
+                            _drawBoxes,
+                            _drawNames,
+                            _drawDistance,
+                            _drawSkeletons,
+                            ColorPlayer,
+                            ColorBot,
+                            ColorBoxVisible,
+                            ColorBoxInvisible,
+                            ColorSkelVisible,
+                            ColorSkelInvisible,
+                            ColorLineVisible,
+                            ColorLineInvisible
+                        );
+                    }
+
+                    ImGui.SameLine();
+                    if (ImGui.Button("Dispose VMM")) Dispose();
                 }
             }
-
-            ImGui.SameLine();
-            if (ImGui.Button("Dispose VMM")) Dispose();
 
             ImGui.End();
         }
