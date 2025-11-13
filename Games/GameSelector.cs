@@ -276,6 +276,9 @@ namespace MamboDMA.Games
                 else
                 {
                     ImGui.Begin("Home", ImGuiWindowFlags.None);
+                    ImGui.Checkbox("Service Control Visible", ref _serviceControlVisible);
+                    ImGui.Checkbox("Keybinds Visible", ref _keybindsVisible);
+                    ImGui.Checkbox("Show Top Infobar", ref _showTopInfoBar);
                     DrawCombo("Game");
                     ImGui.Separator();
                     GameHost.Draw(ImGuiWindowFlags.None);

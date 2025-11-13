@@ -147,7 +147,7 @@ namespace MamboDMA.Games.CS2
 
                     if (_showEntityDebug)
                     {
-                        DrawEntitiesDebugWindow();
+                        DrawEntitiesDebugWindow2();
                     }
 
                     if (_running)
@@ -172,20 +172,19 @@ namespace MamboDMA.Games.CS2
                     ImGui.SameLine();
                     if (ImGui.Button("Dispose VMM")) Dispose();
                 }
-            }
 
-            ImGui.End();
+                ImGui.EndTabBar();
+            }
         }
 
-        private static void DrawEntitiesDebugWindow()
+        // ---------- existing debug table ----------
+        private static void DrawEntitiesDebugWindow2()
         {
-            ImGui.Begin("CS2 Entity Debug", ImGuiWindowFlags.None);
-
             var list = CS2Entities.GetCachedEntitiesSnapshot().ToArray();
 
-            if (ImGui.BeginTable("cs2_dbg_tbl", 6,
-                ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY,
-                new Vector2(1150, 400)))
+            ImGui.Begin("CS2 Entity Debug", ImGuiWindowFlags.None);
+
+            if (ImGui.BeginTable("cs2_dbg_tbl", 6, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY, new Vector2(1150, 400)))
             {
                 ImGui.TableSetupScrollFreeze(0, 1);
                 ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 24);
@@ -193,18 +192,20 @@ namespace MamboDMA.Games.CS2
                 ImGui.TableSetupColumn("Health");
                 ImGui.TableSetupColumn("Team");
                 ImGui.TableSetupColumn("Origin");
-                ImGui.TableSetupColumn("Name");
                 ImGui.TableHeadersRow();
 
                 for (int i = 0; i < list.Length; i++)
                 {
                     var e = list[i];
+                    var p = e.Origin;
+                    string posStr = $"{p.X:F0}, {p.Y:F0}, {p.Z:F0}";
+
                     ImGui.TableNextRow();
                     ImGui.TableSetColumnIndex(0); ImGui.TextUnformatted(i.ToString());
                     ImGui.TableSetColumnIndex(1); ImGui.TextUnformatted(e.LifeState.ToString());
                     ImGui.TableSetColumnIndex(2); ImGui.TextUnformatted(e.Health.ToString());
                     ImGui.TableSetColumnIndex(3); ImGui.TextUnformatted(e.Team.ToString());
-                    ImGui.TableSetColumnIndex(4); ImGui.TextUnformatted(e.Origin.ToString());
+                    ImGui.TableSetColumnIndex(4); ImGui.TextUnformatted(posStr);
                     ImGui.TableSetColumnIndex(5); ImGui.TextUnformatted(e.Name);
                 }
 

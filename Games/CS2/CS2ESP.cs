@@ -33,7 +33,7 @@ namespace MamboDMA.Games.CS2
             {
                 var e = entityList[i];
                 var lineColor = e.Team == CS2Entities.Team.Terrorists ? colorPlayer : colorBot;
-                list.AddLine(new Vector2(), e.Origin, )
+                //list.AddLine(new Vector2(), e.Origin, )
             }
         }
 
