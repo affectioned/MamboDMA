@@ -14,6 +14,7 @@
         <nav class="tabs">
           <button class="tab active" data-tab="general">General Settings</button>
           <button class="tab" data-tab="players">Player Settings</button>
+          <button class="tab" data-tab="loot">Loot Settings</button>
         </nav>
         <span id="status">disconnected</span>
       </div>
@@ -50,15 +51,13 @@
           <label class="inline" title="Flip Y if your world +Y points opposite to image +Y">
             <input id="yFlip" type="checkbox"> Y-flip
           </label>
-
-          <label class="inline" title="Add this world X offset (cm) before scaling; e.g. 4000">
-            World Offset X (cm)
-            <input id="offX" type="number" step="1" value="0"/>
-          </label>
-          <label class="inline" title="Add this world Y offset (cm) before scaling; e.g. 1000">
-            World Offset Y (cm)
-            <input id="offY" type="number" step="1" value="0"/>
-          </label>
+        </div>
+        
+        <div class="row">
+          <p style="color: #a6b0c0; margin: 0;">
+            <strong>Note:</strong> Position calibration is now done by pressing <kbd style="background: #202633; padding: 2px 6px; border-radius: 3px;">C</kbd> 
+            and clicking your location on the map. No manual offsets needed!
+          </p>
         </div>
       </section>
 
@@ -87,11 +86,68 @@
           <label class="inline">Dead Color <input id="colDead" type="color" value="#ffd600"></label>
         </div>
       </section>
+
+      <!-- Loot Settings - ENHANCED -->
+      <section class="tabpage" id="tab-loot" role="tabpanel" aria-label="Loot Settings">
+        <div class="row">
+          <label class="inline"><input id="fLoot" type="checkbox" checked> Show Ground Loot</label>
+          <label class="inline"><input id="fContainers" type="checkbox" checked> Show Containers</label>
+          <label class="inline"><input id="fEmptyContainers" type="checkbox" checked> Show Empty Containers</label>
+          <label class="inline" title="Max draw distance for loot (meters)">
+            Loot Max Range (m)
+            <input id="lootMaxRange" type="number" min="0" step="10" value="200">
+          </label>
+        </div>
+
+        <div class="row">
+          <label class="inline" title="Items below this price won't be shown">
+            Min Price Filter (?)
+            <input id="lootMinPrice" type="number" min="0" step="1000" value="0">
+          </label>
+          <label class="inline" title="Items above this price get special marker/color">
+            Important Threshold (?)
+            <input id="lootImportantThreshold" type="number" min="0" step="5000" value="50000">
+          </label>
+        </div>
+      
+        <div class="row">
+          <label class="inline">Loot Size <input id="szLoot" type="number" min="2" max="20" step="1" value="5"></label>
+          <label class="inline">Container Size <input id="szContainer" type="number" min="2" max="20" step="1" value="7"></label>
+        </div>
+
+        <div class="row">
+          <label class="inline">Regular Loot <input id="colLoot" type="color" value="#00ff88"></label>
+          <label class="inline">Important Loot <input id="colLootImportant" type="color" value="#ff0aff"></label>
+          <label class="inline">Container (Filled) <input id="colContainerFilled" type="color" value="#ffd700"></label>
+          <label class="inline">Container (Empty) <input id="colContainerEmpty" type="color" value="#808080"></label>
+          <label class="inline">Container (Important) <input id="colContainerImportant" type="color" value="#ff0aff"></label>
+        </div>
+        
+        <div class="row">
+          <p style="color: #a6b0c0; margin: 0;">
+            <strong>Legend:</strong> 
+            <span style="display: inline-block; width: 12px; height: 12px; background: #00ff88; margin: 0 4px; vertical-align: middle; transform: rotate(45deg);"></span> Regular Loot (Diamond) | 
+            <span style="display: inline-block; width: 12px; height: 12px; background: #ff0aff; margin: 0 4px; vertical-align: middle;"></span> Important Loot (Star) | 
+            <span style="display: inline-block; width: 12px; height: 12px; background: #ffd700; margin: 0 4px; vertical-align: middle;"></span> Filled Container | 
+            <span style="display: inline-block; width: 12px; height: 12px; background: #808080; margin: 0 4px; vertical-align: middle;"></span> Empty Container | 
+            <span style="display: inline-block; width: 12px; height: 12px; background: #ff0aff; margin: 0 4px; vertical-align: middle;"></span> Important Container
+          </p>
+        </div>
+        
+        <div class="row">
+          <p style="color: #f0c060; margin: 0; font-size: 13px;">
+            ? <strong>Tip:</strong> Hover over loot/containers to see price and distance info in the tooltip!
+          </p>
+        </div>
+      </section>
     </header>
 
     <main id="wrap">
       <canvas id="radar"></canvas>
     </main>
+    
+    <!-- Tooltip -->
+    <div id="tooltip"></div>
   </div>
 
   <script src="radar.js"></script>

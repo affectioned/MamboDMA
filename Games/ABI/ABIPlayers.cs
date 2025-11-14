@@ -121,7 +121,14 @@ namespace MamboDMA.Games.ABI
             public ulong ZoomComp;
             public long  Stamp;
         }
-
+        /// <summary>
+        /// Gets the current origin bias applied to all positions.
+        /// This is needed by ABILootESP to align loot positions with player positions.
+        /// </summary>
+        public static Vector3 GetOriginBias()
+        {
+            return _originBias;
+        }
         private static readonly object _zoomSync = new();
         private static ZoomInfo _zoom;
 

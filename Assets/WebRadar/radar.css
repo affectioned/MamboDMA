@@ -7,14 +7,12 @@
   --border: #202633;
   --toolbar-bg: #0b0f14;
 }
-
 *{ box-sizing: border-box; }
 html,body{
   height:100%; margin:0;
   background:var(--bg); color:var(--fg);
   font:14px/1.4 ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial;
 }
-
 /* Grid layout: toolbar auto-height, canvas fills the rest */
 #app{
   height:100dvh;
@@ -22,14 +20,12 @@ html,body{
   grid-template-rows:auto 1fr;
   min-height:0; /* allow the second row to shrink properly */
 }
-
 /* Toolbar (in-flow, sticky so it stays visible when scrolling small screens) */
 #toolbar{
   position:sticky; top:0; z-index:10;
   background:var(--toolbar-bg);
   border-bottom:1px solid var(--border);
 }
-
 /* Top strip */
 #toolbar-top{
   display:flex; align-items:center; gap:12px;
@@ -42,7 +38,6 @@ html,body{
   padding:4px 8px; cursor:pointer;
 }
 #collapseBtn:hover{ background:#162035; }
-
 .tabs{
   display:flex; gap:8px; align-items:center;
 }
@@ -52,9 +47,7 @@ html,body{
   padding:6px 10px; cursor:pointer;
 }
 .tabs .tab.active{ outline:2px solid var(--accent); }
-
 #status{ color:#9fe3ff; margin-left:auto; }
-
 .tabpage{
   padding:10px 12px;
 }
@@ -71,7 +64,6 @@ html,body{
   color:var(--muted);
 }
 .inline.grow{ flex:1 1 280px; }
-
 input[type="text"], input[type="number"], select{
   background:#0f141c; color:var(--fg);
   border:1px solid var(--border); border-radius:8px; padding:6px 8px; outline:none;
@@ -83,7 +75,6 @@ button{
   padding:6px 10px; cursor:pointer;
 }
 button:hover{ background:#162035; }
-
 /* Canvas area (fills the 2nd grid row) */
 #wrap{
   min-height:0; /* important for grid children that need to shrink */
@@ -94,3 +85,52 @@ button:hover{ background:#162035; }
   cursor:grab;
 }
 #radar.dragging{ cursor:grabbing; }
+
+/* Tooltip */
+#tooltip{
+  position:fixed;
+  background:rgba(20, 25, 35, 0.98);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:8px 12px;
+  color:var(--fg);
+  font-size:13px;
+  pointer-events:none;
+  z-index:1000;
+  display:none;
+  box-shadow:0 4px 12px rgba(0,0,0,0.5);
+  max-width:300px;
+  backdrop-filter:blur(8px);
+}
+#tooltip.visible{ display:block; }
+#tooltip .tt-header{
+  font-weight:600;
+  color:var(--accent);
+  margin-bottom:6px;
+  border-bottom:1px solid var(--border);
+  padding-bottom:4px;
+}
+#tooltip .tt-row{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  padding:2px 0;
+  color:var(--muted);
+}
+#tooltip .tt-row .tt-label{
+  color:var(--muted);
+}
+#tooltip .tt-row .tt-value{
+  color:var(--fg);
+  font-weight:500;
+}
+#tooltip .tt-price{
+  color:#ffd700;
+  font-weight:600;
+}
+#tooltip .tt-health{
+  color:#19ff6a;
+}
+#tooltip .tt-dead{
+  color:#ff4a4a;
+}
