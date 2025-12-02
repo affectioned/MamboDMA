@@ -1,19 +1,15 @@
-﻿using MamboDMA.Services;
-using System;
+﻿using MamboDMA.Input;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
 using System.Numerics;
-using System.Text;
-using System.Threading.Tasks;
-using static MamboDMA.Games.ABI.Players;
+using System.Runtime.InteropServices;
 
 namespace MamboDMA.Games.CS2
 {
     public static class CS2Entities
     {
         public static ulong clientBase;
-        public static ulong entityListPtr, listEntry, controllerBase, playerPawn, listEntry2, addressBase;
+        public static ulong entityListPtr, listEntry, controllerBase, playerPawn, listEntry2, addressBase, localControllerBase;
+        public static Matrix4x4 localViewMatrix;
 
         // https://github.com/neverlosecc/source2sdk/blob/cs2/sdk/include/source2sdk/client/LifeState_t.hpp
         public enum LifeState
@@ -42,9 +38,15 @@ namespace MamboDMA.Games.CS2
             public String Name;
         }
 
-        public static readonly object Sync = new();
+        private static readonly object Sync = new();
+        private static List<CS2Entity> CachedEntities = new(64);
+        public static CS2Entity LocalPlayer { get; private set; }
 
-        private static List<CS2Entity> CachedEntities = new();
+        public static IReadOnlyList<CS2Entity> GetCachedEntitiesSnapshot()
+        {
+            lock (Sync)
+                return CachedEntities; // return the list itself as IReadOnlyList
+        }
 
         private static List<DmaMemory.ModuleInfo> _modules = new();
         private static DmaMemory.ModuleInfo _clientModule;
@@ -68,20 +70,28 @@ namespace MamboDMA.Games.CS2
             while (_running) { try { CacheWorld(); } catch { } HighResDelay(50); }
         }
 
-        private static bool CacheWorld()
+        private static void CacheWorld()
         {
             _modules = DmaMemory.GetModules();
-            if (_modules == null) return false;
+            if (_modules == null) return;
 
             _clientModule = _modules.FirstOrDefault(m => string.Equals(m.Name, "client.dll", StringComparison.OrdinalIgnoreCase));
-            if (_clientModule == null) return false;
+            if (_clientModule == null) return;
 
             clientBase = _clientModule.Base;
 
             entityListPtr = DmaMemory.Read<ulong>(clientBase + CS2Offsets.dwEntityList);
-            if (entityListPtr == 0) return false;
 
-            return true;
+            localControllerBase = DmaMemory.Read<ulong>(clientBase + CS2Offsets.dwLocalPlayerController);
+            ulong vmAddr = clientBase + CS2Offsets.dwViewMatrix;
+
+            // 4x4 floats = 16 * 4 = 64 bytes
+            Span<byte> vmBuf = stackalloc byte[64];
+
+            if (DmaMemory.Read(vmAddr, vmBuf, VmmFlags.NOCACHE))
+            {
+                localViewMatrix = MemoryMarshal.Read<Matrix4x4>(vmBuf);
+            }
         }
 
         private static void CacheEntitiesLoop()
@@ -95,59 +105,51 @@ namespace MamboDMA.Games.CS2
             {
                 if (entityListPtr == 0)
                 {
-                    lock (Sync) CachedEntities = [];
+                    lock (Sync)
+                    {
+                        CachedEntities = [];
+                        LocalPlayer = default;
+                    }
                     return;
                 }
 
-                var tmp = new List<CS2Entity>(64);
+                var entities = new List<CS2Entity>(64);
+                CS2Entity localPlayer = default;
+                bool localFound = false;
 
                 for (int i = 0; i < 64; i++)
                 {
-                    var entryIndex = (i & 0x7FFF) >> 9;
+                    if (!CS2EntityReader.TryGetControllerBase(i, entityListPtr, out var controllerBase))
+                        continue;
 
-                    listEntry = DmaMemory.Read<ulong>(entityListPtr + (ulong)(8 * entryIndex + 16));
-                    if (listEntry == 0) continue;
+                    bool isLocal = controllerBase == localControllerBase;
 
-                    controllerBase = DmaMemory.Read<ulong>(listEntry + (ulong)(112 * (i & 0x1FF)));
-                    if (controllerBase == 0) continue;
+                    if (!CS2EntityReader.TryGetPawnAddress(controllerBase, entityListPtr, out var pawnAddress))
+                        continue;
 
-                    // we can get name from the controller
-                    var buffer = DmaMemory.ReadBytes(controllerBase + CS2Offsets.m_iszPlayerName, 128);
-                    if (buffer == null) continue;
+                    var entity = CS2EntityReader.ReadEntityData(controllerBase, pawnAddress);
 
-                    var nullIndex = Array.IndexOf(buffer, (byte)0);
-                    if (nullIndex < 0) nullIndex = buffer.Length;
-                    var name = Encoding.UTF8.GetString(buffer, 0, nullIndex).Trim();
+                    if (isLocal)
+                    {
+                        localPlayer = entity;
+                        localFound = true;
+                        continue;
+                    }
 
-                    playerPawn = DmaMemory.Read<ulong>(controllerBase + CS2Offsets.m_hPawn);
-                    if (playerPawn == 0) continue;
-
-                    var pawnIndex = (playerPawn & 0x7FFF) >> 9;
-
-                    listEntry2 = DmaMemory.Read<ulong>(entityListPtr + 0x8 * pawnIndex + 16);
-                    if (listEntry2 == 0) continue;
-
-                    addressBase = DmaMemory.Read<ulong>(listEntry2 + 112 * (playerPawn & 0x1FF));
-                    if (addressBase == 0) continue;
-
-                    var lifeStateNum = DmaMemory.Read<int>(addressBase + CS2Offsets.m_lifeState);
-                    var lifeState = (LifeState)lifeStateNum;
-
-                    var health = DmaMemory.Read<int>(addressBase + CS2Offsets.m_iHealth);
-
-                    var teamNum = DmaMemory.Read<int>(addressBase + CS2Offsets.m_iTeamNum);
-                    var team = (Team)teamNum;
-
-                    var origin = DmaMemory.Read<Vector3>(addressBase + CS2Offsets.m_vOldOrigin);
-
-                    tmp.Add(new CS2Entity { LifeState = lifeState, Health = health, Team = team, Origin = origin, Name = name });
+                    entities.Add(entity);
                 }
 
                 lock (Sync)
-                    CachedEntities = tmp;
+                {
+                    CachedEntities = entities;
+                    if (localFound)
+                        LocalPlayer = localPlayer;
+                }
             }
-            // when client closes, it throws an exception
-            catch { }
+            catch
+            {
+                // client closed / DMA error etc.
+            }
         }
 
         private static void HighResDelay(int targetMs)
@@ -156,11 +158,6 @@ namespace MamboDMA.Games.CS2
             int sleepMs = Math.Max(0, targetMs - 1);
             if (sleepMs > 0) Thread.Sleep(sleepMs);
             while (sw.ElapsedMilliseconds < targetMs) Thread.SpinWait(80);
-        }
-
-        public static List<CS2Entity> GetCachedEntitiesSnapshot()
-        {
-            lock (Sync) return [.. CachedEntities];
         }
     }
 }

@@ -20,6 +20,7 @@ namespace MamboDMA.Games.CS2
         private static bool _drawSkeletons = false;
         private static bool _showDebug = false;
         private static bool _showEntityDebug = false;
+        private static bool _showLocalPlayerDebug = false;
 
         // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ TODO: put to Config Class ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
         // Label colors
@@ -144,33 +145,35 @@ namespace MamboDMA.Games.CS2
                     ImGui.Text($"listEntry2: 0x{CS2Entities.listEntry2:X}");
                     ImGui.Text($"addressBase: 0x{CS2Entities.addressBase:X}");
                     ImGui.Checkbox("Show Entity Debug Info", ref _showEntityDebug);
+                    ImGui.Checkbox("Show LocalPlayer Debug Info", ref _showLocalPlayerDebug);
 
                     if (_showEntityDebug)
                     {
-                        DrawEntitiesDebugWindow2();
+                        DrawEntitiesDebugWindow();
                     }
 
-                    if (_running)
+                    if (_showLocalPlayerDebug) 
                     {
-                        CS2ESP.Render(
-                            _drawLines,
-                            _drawBoxes,
-                            _drawNames,
-                            _drawDistance,
-                            _drawSkeletons,
-                            ColorPlayer,
-                            ColorBot,
-                            ColorBoxVisible,
-                            ColorBoxInvisible,
-                            ColorSkelVisible,
-                            ColorSkelInvisible,
-                            ColorLineVisible,
-                            ColorLineInvisible
-                        );
+                        DrawLocalPlayerDebugWindow();
                     }
 
                     ImGui.SameLine();
                     if (ImGui.Button("Dispose VMM")) Dispose();
+                }
+
+                if (_running)
+                {
+                    CS2ESP.Render(
+                        _drawBoxes,
+                        _drawNames,
+                        _drawSkeletons,
+                        ColorPlayer,
+                        ColorBot,
+                        ColorBoxVisible,
+                        ColorBoxInvisible,
+                        ColorSkelVisible,
+                        ColorSkelInvisible
+                    );
                 }
 
                 ImGui.EndTabBar();
@@ -178,7 +181,7 @@ namespace MamboDMA.Games.CS2
         }
 
         // ---------- existing debug table ----------
-        private static void DrawEntitiesDebugWindow2()
+        private static void DrawEntitiesDebugWindow()
         {
             var list = CS2Entities.GetCachedEntitiesSnapshot().ToArray();
 
@@ -192,6 +195,7 @@ namespace MamboDMA.Games.CS2
                 ImGui.TableSetupColumn("Health");
                 ImGui.TableSetupColumn("Team");
                 ImGui.TableSetupColumn("Origin");
+                ImGui.TableSetupColumn("Name");
                 ImGui.TableHeadersRow();
 
                 for (int i = 0; i < list.Length; i++)
@@ -208,6 +212,39 @@ namespace MamboDMA.Games.CS2
                     ImGui.TableSetColumnIndex(4); ImGui.TextUnformatted(posStr);
                     ImGui.TableSetColumnIndex(5); ImGui.TextUnformatted(e.Name);
                 }
+
+                ImGui.EndTable();
+            }
+
+            ImGui.End();
+        }
+
+        private static void DrawLocalPlayerDebugWindow()
+        {
+            ImGui.Begin("CS2 Entity Debug", ImGuiWindowFlags.None);
+
+            if (ImGui.BeginTable("cs2_dbg_tbl", 6, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY, new Vector2(1150, 400)))
+            {
+                ImGui.TableSetupScrollFreeze(0, 1);
+                ImGui.TableSetupColumn("LifeState");
+                ImGui.TableSetupColumn("Health");
+                ImGui.TableSetupColumn("Team");
+                ImGui.TableSetupColumn("Origin");
+                ImGui.TableSetupColumn("Name");
+                ImGui.TableSetupColumn("ViewMatrix");
+                ImGui.TableHeadersRow();
+
+                var lp = CS2Entities.LocalPlayer;
+                var p = lp.Origin;
+                string posStr = $"{p.X:F0}, {p.Y:F0}, {p.Z:F0}";
+
+                ImGui.TableNextRow();
+                ImGui.TableSetColumnIndex(0); ImGui.TextUnformatted(lp.LifeState.ToString());
+                ImGui.TableSetColumnIndex(1); ImGui.TextUnformatted(lp.Health.ToString());
+                ImGui.TableSetColumnIndex(2); ImGui.TextUnformatted(lp.Team.ToString());
+                ImGui.TableSetColumnIndex(3); ImGui.TextUnformatted(posStr);
+                ImGui.TableSetColumnIndex(4); ImGui.TextUnformatted(lp.Name);
+                ImGui.TableSetColumnIndex(5); ImGui.TextUnformatted(CS2Entities.localViewMatrix.ToString());
 
                 ImGui.EndTable();
             }

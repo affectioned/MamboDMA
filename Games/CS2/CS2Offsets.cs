@@ -10,9 +10,9 @@ namespace MamboDMA.Games.CS2
     {
         // namespace CS2Dumper.Offsets 
         // Module: client.dll
-        public const ulong dwEntityList = 0x1D10CF8;
-        public const ulong dwLocalPlayerController = 0x1E1ABD8;
-        public const ulong dwLocalPlayerPawn = 0x1BEBF38;
+        public const ulong dwEntityList = 0x1D11D78;
+        public const ulong dwLocalPlayerController = 0x1E1BC58;
+        public const ulong dwViewMatrix = 0x1E30450;
 
         // namespace CS2Dumper.Schemas
         // Module: client.dll

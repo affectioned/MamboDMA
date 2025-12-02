@@ -1,55 +1,96 @@
 ﻿using ImGuiNET;
 using MamboDMA.Games.ABI;
-using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Numerics;
-using System.Text;
-using System.Threading.Tasks;
-using static MamboDMA.Games.ABI.Players;
 
 namespace MamboDMA.Games.CS2
 {
     public static class CS2ESP
     {
-        public static void Render(bool drawLines, bool drawBoxes, bool drawNames, bool drawDistance, bool drawSkeletons, Vector4 colorPlayer, Vector4 colorBot,
+        public static void Render(
+            bool drawBoxes, bool drawNames, bool drawSkeletons,
+            Vector4 colorPlayer, Vector4 colorBot,
             Vector4 colorBoxVisible, Vector4 colorBoxInvisible,
-            Vector4 colorSkelVisible, Vector4 colorSkelInvisible, Vector4 colorLineVisible, Vector4 colorLineInvisible)
+            Vector4 colorSkelVisible, Vector4 colorSkelInvisible)
         {
-            // TODO: add localPlayer view matrix
-            var viewMatrix = new Matrix4x4();
-
             var list = ImGui.GetForegroundDrawList();
             var io = ImGui.GetIO();
             float scrW = io.DisplaySize.X, scrH = io.DisplaySize.Y;
 
-            // Local helper uses the zoom-aware W2S
+            Matrix4x4 viewMatrix = new Matrix4x4(); // or however you read it
+
+            // one-liner W2S wrapper
             bool W2S(in Vector3 ws, out Vector2 sp) =>
                 CS2Math.WorldToScreen(ws, viewMatrix, scrW, scrH, out sp);
 
-            var entityList = CS2Entities.GetCachedEntitiesSnapshot().ToArray();
+            // color conversion once so we don’t spam calls
+            uint colPlayer = ImGui.GetColorU32(colorPlayer);
+            uint colBot = ImGui.GetColorU32(colorBot);
+            uint colBoxVis = ImGui.GetColorU32(colorBoxVisible);
+            uint colBoxInvis = ImGui.GetColorU32(colorBoxInvisible);
+            uint colSkelVis = ImGui.GetColorU32(colorSkelVisible);
+            uint colSkelInvis = ImGui.GetColorU32(colorSkelInvisible);
 
-            for (int i = 0; i < entityList.Length; i++)
+            // TODO: actually read local player and its team + origin
+            viewMatrix = CS2Entities.localViewMatrix;
+            var local = CS2Entities.LocalPlayer; // whatever you have
+            CS2Entities.Team localTeam = local.Team;
+            Vector3 localPos = local.Origin;
+
+            var entityList = CS2Entities.GetCachedEntitiesSnapshot();
+
+            for (int i = 0; i < entityList.Count; i++)
             {
                 var e = entityList[i];
-                var lineColor = e.Team == CS2Entities.Team.Terrorists ? colorPlayer : colorBot;
-                //list.AddLine(new Vector2(), e.Origin, )
-            }
-        }
 
-        private static void DrawBox(ImDrawListPtr list, Vector2 min, Vector2 max, uint color, float t)
-        {
-            float w = max.X - min.X;
-            float h = max.Y - min.Y;
-            float c = MathF.Min(20, MathF.Min(w * 0.25f, h * 0.25f));
-            list.AddLine(min, new(min.X + c, min.Y), color, t);
-            list.AddLine(min, new(min.X, min.Y + c), color, t);
-            list.AddLine(new(max.X - c, min.Y), new(max.X, min.Y), color, t);
-            list.AddLine(new(max.X, min.Y), new(max.X, min.Y + c), color, t);
-            list.AddLine(new(min.X, max.Y - c), new(min.X, max.Y), color, t);
-            list.AddLine(new(min.X, max.Y), new(min.X + c, max.Y), color, t);
-            list.AddLine(new(max.X - c, max.Y), max, color, t);
-            list.AddLine(max, new(max.X, max.Y - c), color, t);
+                if (e.LifeState != CS2Entities.LifeState.LIFE_ALIVE) continue;
+                if (e.Health <= 0) continue;
+                if (e.Team == localTeam) continue;
+
+                // world positions we need
+                Vector3 feetWorld = e.Origin;
+                Vector3 headWorld = e.Origin + new Vector3(0, 0, 72f);
+
+                // project feet
+                if (!W2S(feetWorld, out var feetScreen))
+                    continue;
+
+                // project head
+                if (!W2S(headWorld, out var headScreen))
+                    continue;
+
+                // basic vis flag – replace with your real visibility check
+                bool isVisible = false; // or your own logic
+
+                // height + width from projection
+                float height = feetScreen.Y - headScreen.Y;
+                if (height <= 0) continue;
+
+                float width = height * 0.45f;
+                float halfW = width * 0.5f;
+
+                Vector2 boxMin = new Vector2(feetScreen.X - halfW, headScreen.Y);
+                Vector2 boxMax = new Vector2(feetScreen.X + halfW, feetScreen.Y);
+
+                if (drawBoxes)
+                {
+                    uint colBox = isVisible ? colBoxVis : colBoxInvis;
+                    list.AddRect(boxMin, boxMax, colBox, 0f, ImDrawFlags.None, 1.5f);
+                }
+
+                if (drawNames)
+                {
+                    string name = e.Name.Length > 0 ? e.Name : "player";
+                    var textSize = ImGui.CalcTextSize(name);
+
+                    // 2px above box
+                    Vector2 namePos = new Vector2(
+                        feetScreen.X - textSize.X * 0.5f,
+                        headScreen.Y - textSize.Y - 2f
+                    );
+                    list.AddText(namePos, colPlayer, name);
+                }
+            }
         }
     }
 }
