@@ -12,6 +12,7 @@ using System.Threading;
 using MamboDMA.Input;
 using MamboDMA.Services;
 using VmmSharpEx;
+using VmmSharpEx.Extensions;
 using VmmSharpEx.Scatter;
 using VmmSharpEx.Scatter.V2;
 using VFlags = VmmSharpEx.Options.VmmFlags;
@@ -226,6 +227,13 @@ public static class DmaMemory
         EnsureAttached();
         return _vmm!.MemReadValue(Pid, address, out value);
     }
+
+    public static ulong FindSignature(string signature, ulong AddrMin = 0, ulong AddrMax = ulong.MaxValue)
+    {
+        EnsureAttached();
+        return _vmm.FindSignature(Pid, signature, AddrMin, AddrMax);
+    }
+
     public static bool Read(ulong address, Span<byte> dst, VmmFlags flags = VmmFlags.NONE)
     {
         EnsureAttached();

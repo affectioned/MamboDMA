@@ -1,5 +1,4 @@
 ﻿using MamboDMA.Input;
-using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
 
@@ -8,7 +7,7 @@ namespace MamboDMA.Games.CS2
     public static class CS2Entities
     {
         public static ulong clientBase;
-        public static ulong entityListPtr, listEntry, controllerBase, playerPawn, listEntry2, addressBase, localControllerBase;
+        public static ulong entityListPtr, localControllerBase;
         public static Matrix4x4 localViewMatrix;
 
         // https://github.com/neverlosecc/source2sdk/blob/cs2/sdk/include/source2sdk/client/LifeState_t.hpp
@@ -59,11 +58,24 @@ namespace MamboDMA.Games.CS2
             if (_running || !DmaMemory.IsAttached) return;
             _running = true;
 
+            CacheModules();
+
+            CS2Offsets.ResolveOffsets(_clientModule);
+
             new Thread(CacheWorldLoop) { IsBackground = true, Priority = ThreadPriority.AboveNormal, Name = "CS2.World" }.Start();
             new Thread(CacheEntitiesLoop) { IsBackground = true, Priority = ThreadPriority.AboveNormal, Name = "CS2.Entities" }.Start();
         }
 
         public static void Stop() => _running = false;
+
+        private static void CacheModules()
+        {
+            _modules = DmaMemory.GetModules();
+            if (_modules == null) return;
+
+            _clientModule = _modules.FirstOrDefault(m => string.Equals(m.Name, "client.dll", StringComparison.OrdinalIgnoreCase));
+            if (_clientModule == null) return;
+        }
 
         private static void CacheWorldLoop()
         {
@@ -72,12 +84,6 @@ namespace MamboDMA.Games.CS2
 
         private static void CacheWorld()
         {
-            _modules = DmaMemory.GetModules();
-            if (_modules == null) return;
-
-            _clientModule = _modules.FirstOrDefault(m => string.Equals(m.Name, "client.dll", StringComparison.OrdinalIgnoreCase));
-            if (_clientModule == null) return;
-
             clientBase = _clientModule.Base;
 
             entityListPtr = DmaMemory.Read<ulong>(clientBase + CS2Offsets.dwEntityList);
@@ -122,7 +128,7 @@ namespace MamboDMA.Games.CS2
                     if (!CS2EntityReader.TryGetControllerBase(i, entityListPtr, out var controllerBase))
                         continue;
 
-                    bool isLocal = controllerBase == localControllerBase;
+                    bool isLocal = DmaMemory.Read<bool>(controllerBase + CS2Offsets.m_bIsLocalPlayerController);
 
                     if (!CS2EntityReader.TryGetPawnAddress(controllerBase, entityListPtr, out var pawnAddress))
                         continue;

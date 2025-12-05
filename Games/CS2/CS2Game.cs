@@ -136,14 +136,13 @@ namespace MamboDMA.Games.CS2
                 {
                     ImGui.Separator();
                     ImGui.Text("©¤ Debug Info ©¤");
+                    ImGui.Text("©¤ IDA Signature Resolve ©¤");
+                    ImGui.Text($"dwEntityList: 0x{CS2Offsets.dwEntityList:X}");
+                    ImGui.Text($"dwLocalPlayerController: 0x{CS2Offsets.dwLocalPlayerController:X}");
+                    ImGui.Text($"dwViewMatrix: 0x{CS2Offsets.dwViewMatrix:X}");
+                    ImGui.Text("©¤ Dynamically Resolved Offsets ©¤");
                     ImGui.Text($"clientBase: 0x{CS2Entities.clientBase:X}");
                     ImGui.Text($"entityListPtr: 0x{CS2Entities.entityListPtr:X}");
-                    ImGui.Text("©¤ 64 controllers ©¤");
-                    ImGui.Text($"listEntry: 0x{CS2Entities.listEntry:X}");
-                    ImGui.Text($"controllerBase: 0x{CS2Entities.controllerBase:X}");
-                    ImGui.Text($"playerPawn: 0x{CS2Entities.playerPawn:X}");
-                    ImGui.Text($"listEntry2: 0x{CS2Entities.listEntry2:X}");
-                    ImGui.Text($"addressBase: 0x{CS2Entities.addressBase:X}");
                     ImGui.Checkbox("Show Entity Debug Info", ref _showEntityDebug);
                     ImGui.Checkbox("Show LocalPlayer Debug Info", ref _showLocalPlayerDebug);
 
@@ -275,9 +274,6 @@ namespace MamboDMA.Games.CS2
 
             CS2Entities.StartCache();
             Logger.Info("[CS2] entity cache threads started");
-
-            //Players.StartCache();
-            //Logger.Info("[CS2] entity cache threads started");
         }
 
         public void Stop()
