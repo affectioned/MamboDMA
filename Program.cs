@@ -1,6 +1,7 @@
 ﻿using System;
 using MamboDMA.Games;
 using MamboDMA.Games.ABI;
+using MamboDMA.Games.CS2;
 using MamboDMA.Games.DayZ;
 using MamboDMA.Games.Example;
 using MamboDMA.Games.Reforger;
@@ -62,6 +63,7 @@ namespace MamboDMA
             GameRegistry.Register(new DayZGame()); 
             GameRegistry.Register(new ExampleGame());
             GameRegistry.Register(new ABIGame());
+            GameRegistry.Register(new CS2Game());
             // GameRegistry.Register(new SomeOtherGame());
             // GameRegistry.Register(new YetAnotherGame());
 
