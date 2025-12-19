@@ -71,7 +71,11 @@ namespace MamboDMA.Games.DBD
                     ImGui.Separator();
                     ImGui.Text("©¤ Debug Info ©¤");
                     ImGui.Text("©¤ IDA Signature Resolve ©¤");
+                    ImGui.Text($"GWorld: 0x{DBDOffsets.GWorld:X}");
+                    ImGui.Text($"GNames: 0x{DBDOffsets.GNames:X}");
+                    ImGui.Text($"GObjects: 0x{DBDOffsets.GObjects:X}");
                     ImGui.Text("©¤ Dynamically Resolved Offsets ©¤");
+                    ImGui.Text($"UWorld: 0x{DBDPlayers.UWorld:X}");
 
                     ImGui.SameLine();
                     if (ImGui.Button("Dispose VMM")) Dispose();
@@ -99,7 +103,8 @@ namespace MamboDMA.Games.DBD
             if (_running || !DmaMemory.IsAttached) return;
             _running = true;
 
-            Logger.Info("[DBD] entity cache threads started");
+            DBDPlayers.StartCache();
+            Logger.Info("[DBD] players cache threads started");
         }
 
         private void Attach() => VmmService.Attach(_dbdExe);
