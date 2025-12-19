@@ -13,7 +13,6 @@ namespace MamboDMA.Games.CS2
         private bool _running;
 
         // ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤ UI config ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
-        private static bool _drawLines = true;
         private static bool _drawBoxes = true;
         private static bool _drawNames = true;
         private static bool _drawDistance = true;

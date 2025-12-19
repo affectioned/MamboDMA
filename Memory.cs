@@ -228,6 +228,14 @@ public static class DmaMemory
         return _vmm!.MemReadValue(Pid, address, out value);
     }
 
+    /// <summary> Calculates a new address by adding the instruction size and a relative virtual address (RVA) to the current address.</summary>
+    public static ulong AddRVA(this ulong address, uint instructionSize, int rva)
+    {
+        // signed rva can be negative, so we need to use long for the calculation
+        long result = (long)address + instructionSize + rva;
+        return (ulong)result;
+    }
+
     public static ulong FindSignature(string signature, ulong AddrMin = 0, ulong AddrMax = ulong.MaxValue)
     {
         EnsureAttached();

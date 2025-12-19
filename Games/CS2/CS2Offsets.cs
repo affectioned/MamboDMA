@@ -1,4 +1,6 @@
-﻿namespace MamboDMA.Games.CS2
+﻿using System;
+
+namespace MamboDMA.Games.CS2
 {
     public static class CS2Offsets
     {
@@ -99,6 +101,8 @@
             if (dwEntityListPtr == 0)
                 throw new Exception("dwEntityListPtr pattern not found");
 
+            var dwEntityListPtrRva = DmaMemory.Read<int>(dwEntityListPtr + 3);
+
             // mov [rip+disp32], rsi → length 7, dispOffset 3
             /*48 89 35 ?? ?? ?? ??
             ^^^^^^^^^^^^^^^^
@@ -106,7 +110,8 @@
             |  | ModRM
             | opcode
             REX*/
-            dwEntityList = ResolveRipRelativeRva(dwEntityListPtr, 7, 3, moduleInfo.Base);
+            dwEntityList = dwEntityListPtr.AddRVA(7, dwEntityListPtrRva);
+            //dwEntityList = ResolveRipRelativeRva(dwEntityListPtr, 7, 3, moduleInfo.Base);
 
             var dwLocalPlayerControllerPtr = DmaMemory.FindSignature(
                 "48 8D 15 ? ? ? ? ? ? ? ? 48 85 D2 74 ? 48 8B 44 24",
@@ -116,10 +121,13 @@
             if (dwLocalPlayerControllerPtr == 0)
                 throw new Exception("dwLocalPlayerControllerPtr pattern not found");
 
+            var dwLocalPlayerControllerPtrRva = DmaMemory.Read<int>(dwLocalPlayerControllerPtr + 3);
+
             // lea     rdx, qword_7FFBB1F8BC58
             // 48 8D 15 -> 1 + 1 + 1
             // ? ? ? ? ? ? ? ?
-            dwLocalPlayerController = ResolveRipRelativeRva(dwLocalPlayerControllerPtr, 7, 3, moduleInfo.Base);
+            dwLocalPlayerController = dwLocalPlayerControllerPtr.AddRVA(7, dwLocalPlayerControllerPtrRva);
+            //dwLocalPlayerController = ResolveRipRelativeRva(dwLocalPlayerControllerPtr, 7, 3, moduleInfo.Base);
 
             var dwViewMatrixPtr = DmaMemory.FindSignature(
                 "48 8D 0D ? ? ? ? 48 C1 E0 06",
@@ -129,11 +137,14 @@
             if (dwViewMatrixPtr == 0)
                 throw new Exception("dwViewMatrixPtr pattern not found");
 
+            var dwViewMatrixPtrRva = DmaMemory.Read<int>(dwViewMatrixPtr + 3);
+
             // lea     rcx, unk_7FFBB1FA0450
-            dwViewMatrix = ResolveRipRelativeRva(dwViewMatrixPtr, 7, 3, moduleInfo.Base);
+            dwViewMatrix = dwViewMatrixPtr.AddRVA(7, dwViewMatrixPtrRva);
+            //dwViewMatrix = ResolveRipRelativeRva(dwViewMatrixPtr, 7, 3, moduleInfo.Base);
         }
 
-        private static ulong ResolveRipRelativeRva(
+/*        private static ulong ResolveRipRelativeRva(
             ulong instrAddress,
             int instrLength,
             int dispOffset,
@@ -143,6 +154,6 @@
             ulong next = instrAddress + (ulong)instrLength;
             ulong absAddr = (ulong)((long)next + disp32);
             return absAddr - moduleBase; // RVA
-        }
+        }*/
     }
 }
